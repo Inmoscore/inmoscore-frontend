@@ -1,23 +1,79 @@
+'use client';
+
+import { useRouter } from 'next/navigation';
+import { useEffect, useState } from 'react';
+
 export default function Home() {
+  const router = useRouter();
+  const [logueado, setLogueado] = useState(false);
+
+  useEffect(() => {
+    const token = localStorage.getItem('token');
+    setLogueado(!!token);
+  }, []);
+
+  const handleBuscar = () => {
+    if (!logueado) {
+      router.push('/login');
+    } else {
+      router.push('/buscar');
+    }
+  };
+
+  const handleReportar = () => {
+    if (!logueado) {
+      router.push('/login');
+    } else {
+      router.push('/reportar');
+    }
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem('token');
+    localStorage.removeItem('user');
+    setLogueado(false);
+  };
+
   return (
-    <main className="min-h-screen bg-gradient-to-br from-blue-600 to-blue-800 text-white">
-      <div className="container mx-auto px-4 py-20">
-        <div className="max-w-3xl mx-auto text-center">
-          <h1 className="text-5xl font-bold mb-6">
-            InmoScore
-          </h1>
-          <p className="text-xl mb-8 text-blue-100">
-            Consulta el historial de riesgo de arrendatarios en Colombia
-          </p>
-          <div className="flex gap-4 justify-center">
-            <a href="/buscar" className="px-8 py-3 bg-white text-blue-600 rounded-lg font-semibold hover:bg-gray-100 transition">
-              Buscar Arrendatario
-            </a>
-            <a href="/reportar" className="px-8 py-3 bg-blue-700 text-white border-2 border-white rounded-lg font-semibold hover:bg-blue-800 transition">
-              Reportar
-            </a>
-          </div>
+    <main className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-600 to-blue-800">
+      <div className="text-center text-white">
+        <h1 className="text-5xl font-bold mb-4">InmoScore</h1>
+        <p className="mb-8 text-lg">
+          Consulta el historial de riesgo de arrendatarios en Colombia
+        </p>
+
+        <div className="flex gap-4 justify-center mb-6">
+          <button
+            onClick={handleBuscar}
+            className="px-6 py-3 bg-white text-blue-700 rounded font-semibold"
+          >
+            Buscar Arrendatario
+          </button>
+
+          <button
+            onClick={handleReportar}
+            className="px-6 py-3 border border-white rounded font-semibold"
+          >
+            Reportar
+          </button>
         </div>
+
+        {/* 🔐 Estado de sesión */}
+        {!logueado ? (
+          <button
+            onClick={() => router.push('/login')}
+            className="underline"
+          >
+            Iniciar sesión
+          </button>
+        ) : (
+          <button
+            onClick={handleLogout}
+            className="underline text-red-200"
+          >
+            Cerrar sesión
+          </button>
+        )}
       </div>
     </main>
   );

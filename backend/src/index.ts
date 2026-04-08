@@ -1,154 +1,703 @@
-import express from 'express';
+import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import dotenv from 'dotenv';
+import path from 'path';
+import fs from 'fs';
+import dns from 'dns';
+import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
-dotenv.config();
+// ================================
+// NETWORK / ENV
+// ================================
+
+dns.setServers(['8.8.8.8', '8.8.4.4']);
+
+const envPath = path.resolve(process.cwd(), '.env');
+const envExists = fs.existsSync(envPath);
+const envResult = dotenv.config({ path: envPath });
+
+console.log('ENV PATH:', envPath);
+console.log('ENV exists:', envExists);
+console.log('DOTENV error:', envResult.error ? envResult.error.message : 'none');
+console.log('DOTENV parsed keys:', envResult.parsed ? Object.keys(envResult.parsed) : []);
+
+const {
+  PORT = '3001',
+  SUPABASE_URL,
+  SUPABASE_SERVICE_ROLE_KEY,
+  JWT_SECRET,
+} = process.env;
+
+if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !JWT_SECRET) {
+  console.error('❌ Error: faltan variables requeridas en backend/.env');
+  console.error('Requeridas: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, JWT_SECRET');
+  process.exit(1);
+}
+
+// ================================
+// APP / CLIENTS
+// ================================
 
 const app = express();
-const PORT = process.env.PORT || 3001;
 
-// Seguridad con Helmet
+const supabase: SupabaseClient = createClient(
+  SUPABASE_URL,
+  SUPABASE_SERVICE_ROLE_KEY,
+  {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false,
+    },
+  }
+);
+
+// ================================
+// TYPES
+// ================================
+
+interface JwtPayload {
+  id: string;
+  email: string;
+  tipo_usuario: string;
+}
+
+interface AuthRequest extends Request {
+  user?: JwtPayload;
+}
+
+// ================================
+// MIDDLEWARES
+// ================================
+
 app.use(helmet());
 
-// Configuración CORS - Permitir requests desde el frontend en Vercel
-app.use(cors({
-  origin: [
-    'https://inmoscore-frontend.vercel.app',
-    'https://inmoscore-frontend-git-main-inmoscore-2369s-projects.vercel.app'
-  ],
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true
-}));
+app.use(
+  cors({
+    origin: [
+      'http://localhost:3000',
+      'http://localhost:3002',
+      'https://inmoscore-frontend.vercel.app',
+    ],
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+    credentials: true,
+  })
+);
 
-// Parser JSON
-app.use(express.json());
+app.use(express.json({ limit: '1mb' }));
 
-// Límite de peticiones (100 por 15 minutos)
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 100,
-  message: 'Demasiadas peticiones desde esta IP, por favor intente más tarde'
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: 'Demasiadas peticiones desde esta IP',
+  },
 });
+
 app.use(limiter);
 
-// ==========================================
-// RUTAS DE LA API
-// ==========================================
+// ================================
+// HELPERS
+// ================================
 
-// Ruta de prueba - Health Check
-app.get('/health', (req, res) => {
-  res.json({ 
-    status: 'OK', 
-    message: 'InmoScore API funcionando correctamente',
-    timestamp: new Date().toISOString()
-  });
-});
+function signToken(user: { id: string; email: string; tipo_usuario: string }): string {
+  return jwt.sign(
+    {
+      id: user.id,
+      email: user.email,
+      tipo_usuario: user.tipo_usuario,
+    },
+    JWT_SECRET as string,
+    { expiresIn: '7d' }
+  );
+}
 
-// Ruta principal
-app.get('/', (req, res) => {
-  res.json({ 
-    message: 'Bienvenido a InmoScore API',
-    version: '1.0.0',
-    description: 'API para consulta de historial de arrendatarios en Colombia',
-    endpoints: {
-      health: '/health',
-      search: '/api/search-tenant',
-      report: '/api/report-tenant'
-    }
-  });
-});
+function calculateScore(reportes: number, procesos: number): number {
+  let score = 100;
+  score -= reportes * 20;
+  score -= procesos * 30;
+  return Math.max(0, score);
+}
 
-// Buscar arrendatario por cédula
-app.get('/api/search-tenant', async (req, res) => {
+function getClasificacion(score: number): string {
+  if (score >= 80) return 'bajo';
+  if (score >= 50) return 'medio';
+  return 'alto';
+}
+
+function isValidCedula(cedula: string): boolean {
+  return /^\d{6,10}$/.test(cedula);
+}
+
+function normalizeText(value: unknown): string {
+  return String(value ?? '').trim().toUpperCase();
+}
+
+// ================================
+// AUTH MIDDLEWARE
+// ================================
+
+function authenticateToken(req: AuthRequest, res: Response, next: NextFunction): void {
+  const authHeader = req.headers.authorization;
+  const token = authHeader?.startsWith('Bearer ') ? authHeader.split(' ')[1] : null;
+
+  if (!token) {
+    res.status(401).json({
+      success: false,
+      message: 'Token no proporcionado',
+    });
+    return;
+  }
+
   try {
-    const { cedula } = req.query;
-    
-    if (!cedula) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'La cédula es requerida' 
-      });
+    const decoded = jwt.verify(token, JWT_SECRET as string) as JwtPayload;
+    req.user = decoded;
+    next();
+  } catch {
+    res.status(403).json({
+      success: false,
+      message: 'Token inválido',
+    });
+  }
+}
+
+function requireAdmin(req: AuthRequest, res: Response, next: NextFunction): void {
+  if (req.user?.tipo_usuario !== 'admin') {
+    res.status(403).json({
+      success: false,
+      message: 'Acceso denegado',
+    });
+    return;
+  }
+  next();
+}
+
+// ================================
+// HEALTH
+// ================================
+
+app.get('/health', async (_req: Request, res: Response) => {
+  try {
+    const { error } = await supabase.from('tenants').select('id').limit(1);
+
+    if (error) {
+      throw error;
     }
 
-    // Aquí iría la lógica para buscar en la base de datos
-    // Por ahora devolvemos un ejemplo
     res.json({
       success: true,
-      nombre: 'Juan Pérez',
-      cedula: cedula,
-      score: 85,
-      clasificacion: 'Bajo riesgo',
-      numero_reportes: 0,
-      procesos_judiciales: 0
+      status: 'OK',
+      message: 'InmoScore API conectada a Supabase',
+      timestamp: new Date().toISOString(),
     });
-    
-  } catch (error) {
-    console.error('Error al buscar arrendatario:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Error interno del servidor' 
+  } catch (error: any) {
+    res.status(500).json({
+      success: false,
+      status: 'ERROR',
+      message: 'Error conectando a Supabase',
+      detail: error?.message ?? 'unknown',
+      timestamp: new Date().toISOString(),
     });
   }
 });
 
-// Reportar arrendatario
-app.post('/api/report-tenant', async (req, res) => {
+// ================================
+// AUTH ROUTES
+// ================================
+
+app.post('/api/auth/register', async (req: Request, res: Response) => {
   try {
-    const { nombre, cedula, telefono, ciudad, tipo_problema, descripcion } = req.body;
-    
-    // Validación básica
-    if (!nombre || !cedula || !ciudad || !tipo_problema || !descripcion) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Todos los campos son requeridos' 
+    const { nombre, email, password, tipo_usuario } = req.body ?? {};
+
+    if (!nombre || !email || !password) {
+      res.status(400).json({
+        success: false,
+        message: 'Nombre, email y contraseña son requeridos',
       });
+      return;
     }
 
-    // Aquí iría la lógica para guardar en la base de datos
-    // Por ahora devolvemos éxito
+    const cleanEmail = String(email).trim().toLowerCase();
+
+    const { data: existing, error: existingError } = await supabase
+      .from('users')
+      .select('id')
+      .eq('email', cleanEmail)
+      .maybeSingle();
+
+    if (existingError) {
+      throw existingError;
+    }
+
+    if (existing) {
+      res.status(400).json({
+        success: false,
+        message: 'El email ya está registrado',
+      });
+      return;
+    }
+
+    const hashedPassword = await bcrypt.hash(String(password), 10);
+
+    const { data: newUser, error } = await supabase
+      .from('users')
+      .insert({
+        nombre: String(nombre).trim(),
+        email: cleanEmail,
+        password: hashedPassword,
+        tipo_usuario: tipo_usuario || 'propietario',
+        fecha_registro: new Date().toISOString(),
+        email_verificado: false,
+      })
+      .select('id, nombre, email, tipo_usuario')
+      .single();
+
+    if (error || !newUser) {
+      throw error || new Error('No se pudo crear el usuario');
+    }
+
+    const token = signToken({
+      id: newUser.id,
+      email: newUser.email,
+      tipo_usuario: newUser.tipo_usuario,
+    });
+
     res.status(201).json({
       success: true,
-      message: 'Reporte creado exitosamente',
-      data: {
-        nombre,
-        cedula,
-        tipo_problema,
-        fecha: new Date().toISOString()
-      }
+      token,
+      user: newUser,
     });
-    
   } catch (error) {
-    console.error('Error al crear reporte:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Error interno del servidor' 
+    console.error('Error en registro:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al registrar usuario',
     });
   }
 });
 
-// Manejo de rutas no encontradas
-app.use((req, res) => {
-  res.status(404).json({ 
-    success: false, 
-    message: 'Ruta no encontrada' 
+app.post('/api/auth/login', async (req: Request, res: Response) => {
+  try {
+    const { email, password } = req.body ?? {};
+
+    if (!email || !password) {
+      res.status(400).json({
+        success: false,
+        message: 'Email y contraseña son requeridos',
+      });
+      return;
+    }
+
+    const cleanEmail = String(email).trim().toLowerCase();
+
+    const { data: user, error } = await supabase
+      .from('users')
+      .select('*')
+      .eq('email', cleanEmail)
+      .maybeSingle();
+
+    if (error || !user) {
+      res.status(401).json({
+        success: false,
+        message: 'Credenciales inválidas',
+      });
+      return;
+    }
+
+    const isValidPassword = await bcrypt.compare(String(password), user.password);
+
+    if (!isValidPassword) {
+      res.status(401).json({
+        success: false,
+        message: 'Credenciales inválidas',
+      });
+      return;
+    }
+
+    const token = signToken({
+      id: user.id,
+      email: user.email,
+      tipo_usuario: user.tipo_usuario,
+    });
+
+    res.json({
+      success: true,
+      token,
+      user: {
+        id: user.id,
+        nombre: user.nombre,
+        email: user.email,
+        tipo_usuario: user.tipo_usuario,
+      },
+    });
+  } catch (error) {
+    console.error('Error en login:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error al iniciar sesión',
+    });
+  }
+});
+
+// ================================
+// TENANTS ROUTES
+// ================================
+
+app.get('/api/tenants/search', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const { cedula } = req.query;
+
+    if (!cedula || typeof cedula !== 'string') {
+      res.status(400).json({
+        success: false,
+        message: 'La cédula es requerida',
+      });
+      return;
+    }
+
+    if (!isValidCedula(cedula)) {
+      res.status(400).json({
+        success: false,
+        message: 'Formato de cédula inválido (6-10 dígitos)',
+      });
+      return;
+    }
+
+    const { data: tenant, error: tenantError } = await supabase
+      .from('tenants')
+      .select('*')
+      .eq('cedula', cedula)
+      .maybeSingle();
+
+    if (tenantError) {
+      throw tenantError;
+    }
+
+    if (!tenant) {
+      res.json({
+        success: true,
+        cedula,
+        nombre: null,
+        score: null,
+        clasificacion: null,
+        total_reportes: 0,
+        reportes_aprobados: 0,
+        procesos_judiciales: 0,
+        detalle_reportes: [],
+        detalle_procesos: [],
+      });
+      return;
+    }
+
+    const { data: reportes, error: reportesError } = await supabase
+      .from('reports')
+      .select('*')
+      .eq('tenant_id', tenant.id)
+      .eq('estado', 'aprobado')
+      .order('fecha_reporte', { ascending: false });
+
+    if (reportesError) {
+      throw reportesError;
+    }
+
+    const { data: procesos, error: procesosError } = await supabase
+      .from('legal_cases')
+      .select('*')
+      .eq('cedula', cedula);
+
+    if (procesosError) {
+      throw procesosError;
+    }
+
+    const totalReportes = reportes?.length || 0;
+    const totalProcesos = procesos?.length || 0;
+    const score = calculateScore(totalReportes, totalProcesos);
+    const clasificacion = getClasificacion(score);
+
+    res.json({
+      success: true,
+      cedula: tenant.cedula,
+      nombre: tenant.nombre,
+      score,
+      clasificacion,
+      total_reportes: totalReportes,
+      reportes_aprobados: totalReportes,
+      procesos_judiciales: totalProcesos,
+      detalle_reportes: reportes || [],
+      detalle_procesos: procesos || [],
+    });
+  } catch (error) {
+    console.error('Error al buscar arrendatario:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error interno del servidor',
+    });
+  }
+});
+
+// Ruta adicional opcional para detalle simple por cédula
+app.get('/api/tenants/:cedula', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const { cedula } = req.params;
+
+    if (!cedula || !isValidCedula(String(cedula))) {
+      res.status(400).json({
+        success: false,
+        message: 'Cédula inválida (6-10 dígitos)',
+      });
+      return;
+    }
+
+    const { data: tenant, error: tenantError } = await supabase
+      .from('tenants')
+      .select('*')
+      .eq('cedula', cedula)
+      .maybeSingle();
+
+    if (tenantError) {
+      throw tenantError;
+    }
+
+    if (!tenant) {
+      res.status(404).json({
+        success: false,
+        message: 'Inquilino no encontrado',
+      });
+      return;
+    }
+
+    const { data: reports, error: reportsError } = await supabase
+      .from('reports')
+      .select('*')
+      .eq('tenant_id', tenant.id)
+      .order('fecha_reporte', { ascending: false });
+
+    if (reportsError) {
+      throw reportsError;
+    }
+
+    res.json({
+      success: true,
+      tenant,
+      reports: reports || [],
+    });
+  } catch (error) {
+    console.error('Error en búsqueda detalle:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error interno del servidor',
+    });
+  }
+});
+
+// ================================
+// REPORTS ROUTES
+// ================================
+
+app.post('/api/reports', authenticateToken, async (req: AuthRequest, res: Response) => {
+  try {
+    const { nombre, cedula, telefono, ciudad, tipo_problema, descripcion } = req.body ?? {};
+
+    if (!nombre || !cedula || !ciudad || !tipo_problema || !descripcion) {
+      res.status(400).json({
+        success: false,
+        message: 'Todos los campos son requeridos',
+      });
+      return;
+    }
+
+    if (!isValidCedula(String(cedula))) {
+      res.status(400).json({
+        success: false,
+        message: 'Cédula inválida (6-10 dígitos)',
+      });
+      return;
+    }
+
+    let { data: tenant, error: tenantLookupError } = await supabase
+      .from('tenants')
+      .select('id')
+      .eq('cedula', String(cedula))
+      .maybeSingle();
+
+    if (tenantLookupError) {
+      throw tenantLookupError;
+    }
+
+    if (!tenant) {
+      const { data: newTenant, error: tenantInsertError } = await supabase
+        .from('tenants')
+        .insert({
+          nombre: normalizeText(nombre),
+          cedula: String(cedula).trim(),
+          telefono: telefono ? String(telefono).trim() : null,
+          ciudad: normalizeText(ciudad),
+          fecha_creacion: new Date().toISOString(),
+        })
+        .select('id')
+        .single();
+
+      if (tenantInsertError || !newTenant) {
+        throw tenantInsertError || new Error('No se pudo crear el arrendatario');
+      }
+
+      tenant = newTenant;
+    }
+
+    const { data: report, error: reportError } = await supabase
+      .from('reports')
+      .insert({
+        tenant_id: tenant.id,
+        tipo_problema: String(tipo_problema).trim(),
+        descripcion: String(descripcion).trim(),
+        fecha_reporte: new Date().toISOString(),
+        estado: 'pendiente',
+        reportado_por: req.user?.id || null,
+      })
+      .select('*')
+      .single();
+
+    if (reportError || !report) {
+      throw reportError || new Error('No se pudo crear el reporte');
+    }
+
+    res.status(201).json({
+      success: true,
+      message: 'Reporte creado exitosamente y pendiente de revisión',
+      report,
+    });
+  } catch (error) {
+    console.error('Error al crear reporte:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error interno del servidor',
+    });
+  }
+});
+
+// ================================
+// ADMIN ROUTES
+// ================================
+
+app.get(
+  '/api/admin/reports',
+  authenticateToken,
+  requireAdmin,
+  async (_req: AuthRequest, res: Response) => {
+    try {
+      const { data: reports, error } = await supabase
+        .from('reports')
+        .select(`
+          *,
+          tenants (
+            nombre,
+            cedula,
+            ciudad
+          )
+        `)
+        .eq('estado', 'pendiente')
+        .order('fecha_reporte', { ascending: false });
+
+      if (error) {
+        throw error;
+      }
+
+      res.json({
+        success: true,
+        reports: reports || [],
+      });
+    } catch (error) {
+      console.error('Error al obtener reportes admin:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Error interno',
+      });
+    }
+  }
+);
+
+app.put(
+  '/api/admin/reports/:id',
+  authenticateToken,
+  requireAdmin,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const { id } = req.params;
+      const { estado } = req.body ?? {};
+
+      if (!['aprobado', 'rechazado'].includes(String(estado))) {
+        res.status(400).json({
+          success: false,
+          message: 'Estado inválido',
+        });
+        return;
+      }
+
+      const { data: report, error } = await supabase
+        .from('reports')
+        .update({ estado })
+        .eq('id', id)
+        .select('*')
+        .single();
+
+      if (error || !report) {
+        throw error || new Error('No se pudo actualizar el reporte');
+      }
+
+      res.json({
+        success: true,
+        message: `Reporte ${estado === 'aprobado' ? 'aprobado' : 'rechazado'} exitosamente`,
+        report,
+      });
+    } catch (error) {
+      console.error('Error al actualizar reporte:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Error interno',
+      });
+    }
+  }
+);
+
+// ================================
+// 404 / ERROR HANDLERS
+// ================================
+
+app.use((req: Request, res: Response) => {
+  res.status(404).json({
+    success: false,
+    message: 'Ruta no encontrada',
+    path: req.path,
   });
 });
 
-// Manejo de errores
-app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
-  console.error('Error:', err);
-  res.status(500).json({ 
-    success: false, 
-    message: 'Error interno del servidor' 
+app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
+  console.error('Error no controlado:', err);
+  res.status(500).json({
+    success: false,
+    message: 'Error interno del servidor',
   });
 });
 
-// Iniciar servidor
-app.listen(PORT, () => {
+// ================================
+// SERVER START
+// ================================
+
+app.listen(Number(PORT), async () => {
   console.log(`🚀 Servidor InmoScore corriendo en puerto ${PORT}`);
-  console.log(`📍 URL: http://localhost:${PORT}`);
-  console.log(`🔒 CORS configurado para: https://inmoscore-frontend.vercel.app`);
+
+  try {
+    const { error } = await supabase.from('tenants').select('id').limit(1);
+    if (error) throw error;
+    console.log('✅ Conexión a Supabase establecida');
+  } catch (err) {
+    console.error('❌ Error conectando a Supabase:', err);
+  }
 });

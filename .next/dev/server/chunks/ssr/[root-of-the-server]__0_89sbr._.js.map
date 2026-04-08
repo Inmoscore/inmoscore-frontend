@@ -1,0 +1,7 @@
+{
+  "version": 3,
+  "sources": [],
+  "sections": [
+    {"offset": {"line": 13, "column": 0}, "map": {"version":3,"sources":["file:///C:/Users/Usuario/Documents/inmoscore/src/app/favicon.ico.mjs%20%28structured%20image%20object%29"],"sourcesContent":["import src from \"IMAGE\";\nexport default { src, width: 256, height: 256 }\n"],"names":["src","width","height"],"mappings":";;;;AAAA;;uCACe;IAAEA,KAAAA,0IAAG;IAAEC,OAAO;IAAKC,QAAQ;AAAI"}},
+    {"offset": {"line": 28, "column": 0}, "map": {"version":3,"sources":["file:///C:/Users/Usuario/Documents/inmoscore/src/app/prueba/page.tsx"],"sourcesContent":["export default function Page() {\r\n  return (\r\n    <div>\r\n      <h1>PRUEBA FUNCIONA</h1>\r\n    </div>\r\n  );\r\n}"],"names":["Page"],"mappings":";;;;;;AAAe,SAASA;IACtB,qBACE,8OAAC;kBACC,cAAA,8OAAC;sBAAG;;;;;;;;;;;AAGV"}}]
+}

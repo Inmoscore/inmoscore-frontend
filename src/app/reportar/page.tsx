@@ -1,30 +1,72 @@
 'use client';
 
 import { useState } from 'react';
+import { useRouter } from 'next/navigation';
 
-export default function BuscarPage() {
-  const [cedula, setCedula] = useState('');
-  const [resultado, setResultado] = useState<any>(null);
+export default function ReportarPage() {
+  const router = useRouter();
+
+  const [formData, setFormData] = useState({
+    nombre: '',
+    cedula: '',
+    telefono: '',
+    ciudad: '',
+    tipo_problema: '',
+    descripcion: '',
+  });
+
+  const [mensaje, setMensaje] = useState('');
   const [cargando, setCargando] = useState(false);
-  const [error, setError] = useState('');
 
-  const buscarArrendatario = async (e: React.FormEvent) => {
+  const handleChange = (
+    e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>
+  ) => {
+    setFormData({
+      ...formData,
+      [e.target.name]: e.target.value,
+    });
+  };
+
+  const enviarReporte = async (e: React.FormEvent) => {
     e.preventDefault();
     setCargando(true);
-    setError('');
-    setResultado(null);
+    setMensaje('');
 
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/search-tenant?cedula=${cedula}`);
-      const data = await response.json();
-      
-      if (response.ok) {
-        setResultado(data);
-      } else {
-        setError(data.message || 'No se encontró el arrendatario');
+      const token = localStorage.getItem('token');
+
+      if (!token) {
+        setMensaje('Debes iniciar sesión para reportar');
+        router.push('/login');
+        return;
       }
-    } catch (err) {
-      setError('Error al conectar con el servidor');
+
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/reports`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(formData),
+      });
+
+      const data = await response.json();
+
+      if (response.ok) {
+        setMensaje('Reporte enviado correctamente');
+        setFormData({
+          nombre: '',
+          cedula: '',
+          telefono: '',
+          ciudad: '',
+          tipo_problema: '',
+          descripcion: '',
+        });
+      } else {
+        setMensaje(data.message || 'Error al enviar reporte');
+      }
+    } catch (error) {
+      setMensaje('Error al conectar con el servidor');
     } finally {
       setCargando(false);
     }
@@ -32,51 +74,87 @@ export default function BuscarPage() {
 
   return (
     <div className="min-h-screen bg-gray-100 p-8">
-      <div className="max-w-2xl mx-auto">
-        <h1 className="text-3xl font-bold mb-6 text-center">Buscar Arrendatario</h1>
-        
-        <form onSubmit={buscarArrendatario} className="bg-white p-6 rounded-lg shadow-md mb-6">
-          <div className="mb-4">
-            <label className="block text-gray-700 font-bold mb-2">
-              Número de Cédula
-            </label>
-            <input
-              type="text"
-              value={cedula}
-              onChange={(e) => setCedula(e.target.value)}
-              className="w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="Ingrese la cédula"
-              required
-            />
-          </div>
-          
+      <div className="max-w-xl mx-auto bg-white p-6 rounded-lg shadow-md">
+        <h1 className="text-2xl font-bold mb-6 text-center">
+          Reportar Inquilino
+        </h1>
+
+        <form onSubmit={enviarReporte} className="space-y-4">
+          <input
+            type="text"
+            name="nombre"
+            placeholder="Nombre completo"
+            value={formData.nombre}
+            onChange={handleChange}
+            className="w-full px-3 py-2 border rounded-lg"
+            required
+          />
+
+          <input
+            type="text"
+            name="cedula"
+            placeholder="Cédula"
+            value={formData.cedula}
+            onChange={handleChange}
+            className="w-full px-3 py-2 border rounded-lg"
+            required
+          />
+
+          <input
+            type="text"
+            name="telefono"
+            placeholder="Teléfono (opcional)"
+            value={formData.telefono}
+            onChange={handleChange}
+            className="w-full px-3 py-2 border rounded-lg"
+          />
+
+          <input
+            type="text"
+            name="ciudad"
+            placeholder="Ciudad"
+            value={formData.ciudad}
+            onChange={handleChange}
+            className="w-full px-3 py-2 border rounded-lg"
+            required
+          />
+
+          <select
+  name="tipo_problema"
+  value={formData.tipo_problema}
+  onChange={handleChange}
+  className="w-full px-3 py-2 border rounded-lg"
+  required
+>
+  <option value="">Selecciona el tipo de problema</option>
+  <option value="impago">Mora / Impago</option>
+  <option value="danos">Daños al inmueble</option>
+  <option value="desalojo">Desalojo</option>
+  <option value="ruido">Ruido</option>
+  <option value="otros">Otros</option>
+</select>
+
+          <textarea
+            name="descripcion"
+            placeholder="Describe el problema"
+            value={formData.descripcion}
+            onChange={handleChange}
+            className="w-full px-3 py-2 border rounded-lg"
+            rows={4}
+            required
+          />
+
           <button
             type="submit"
             disabled={cargando}
-            className="w-full bg-blue-600 text-white font-bold py-2 px-4 rounded-lg hover:bg-blue-700 disabled:bg-gray-400"
+            className="w-full bg-blue-600 text-white py-2 rounded-lg disabled:bg-gray-400"
           >
-            {cargando ? 'Buscando...' : 'Buscar'}
+            {cargando ? 'Enviando...' : 'Enviar reporte'}
           </button>
         </form>
 
-        {error && (
-          <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
-            {error}
-          </div>
-        )}
-
-        {resultado && (
-          <div className="bg-white p-6 rounded-lg shadow-md">
-            <h2 className="text-2xl font-bold mb-4">Resultado</h2>
-            <div className="space-y-2">
-              <p><strong>Nombre:</strong> {resultado.nombre}</p>
-              <p><strong>Cédula:</strong> {resultado.cedula}</p>
-              <p><strong>Score:</strong> {resultado.score}</p>
-              <p><strong>Clasificación:</strong> {resultado.clasificacion}</p>
-              <p><strong>Reportes:</strong> {resultado.numero_reportes}</p>
-              <p><strong>Procesos judiciales:</strong> {resultado.procesos_judiciales}</p>
-            </div>
-          </div>
+        {mensaje && (
+          <p className="mt-4 text-center">{mensaje}</p>
         )}
       </div>
     </div>
