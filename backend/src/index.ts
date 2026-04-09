@@ -8,6 +8,7 @@ import fs from 'fs';
 import dns from 'dns';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import { z } from 'zod';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
 // ================================
@@ -68,6 +69,27 @@ interface JwtPayload {
 interface AuthRequest extends Request {
   user?: JwtPayload;
 }
+
+// ================================
+// VALIDATIONS
+// ================================
+
+const registerSchema = z.object({
+  nombre: z.string().min(3, 'El nombre debe tener al menos 3 caracteres').optional(),
+  fullName: z.string().min(3, 'El nombre debe tener al menos 3 caracteres').optional(),
+  email: z.string().email('Email inválido'),
+  password: z.string().min(6, 'La contraseña debe tener al menos 6 caracteres'),
+  phone: z.string().optional().nullable(),
+  tipo_usuario: z.string().optional(),
+}).refine((data) => Boolean(data.nombre || data.fullName), {
+  message: 'El nombre es requerido',
+  path: ['nombre'],
+});
+
+const loginSchema = z.object({
+  email: z.string().email('Email inválido'),
+  password: z.string().min(1, 'La contraseña es requerida'),
+});
 
 // ================================
 // MIDDLEWARES
@@ -214,53 +236,67 @@ app.get('/health', async (_req: Request, res: Response) => {
 
 app.post('/api/auth/register', async (req: Request, res: Response) => {
   try {
-    const { nombre, email, password, tipo_usuario } = req.body ?? {};
+    const parsed = registerSchema.safeParse(req.body ?? {});
 
-    if (!nombre || !email || !password) {
+    if (!parsed.success) {
       res.status(400).json({
         success: false,
-        message: 'Nombre, email y contraseña son requeridos',
+        message: 'Datos inválidos',
+        errors: parsed.error.flatten(),
       });
       return;
     }
 
-    const cleanEmail = String(email).trim().toLowerCase();
+    const nombre = String(parsed.data.nombre || parsed.data.fullName || '').trim();
+    const email = String(parsed.data.email).trim().toLowerCase();
+    const password = String(parsed.data.password);
+    const tipo_usuario = String(parsed.data.tipo_usuario || 'propietario').trim();
 
-    const { data: existing, error: existingError } = await supabase
+    const { data: existingUser, error: existingUserError } = await supabase
       .from('users')
       .select('id')
-      .eq('email', cleanEmail)
+      .eq('email', email)
       .maybeSingle();
 
-    if (existingError) {
-      throw existingError;
+    if (existingUserError) {
+      console.error('Error verificando usuario existente:', existingUserError);
+      res.status(500).json({
+        success: false,
+        message: 'Error verificando usuario existente',
+      });
+      return;
     }
 
-    if (existing) {
-      res.status(400).json({
+    if (existingUser) {
+      res.status(409).json({
         success: false,
         message: 'El email ya está registrado',
       });
       return;
     }
 
-    const hashedPassword = await bcrypt.hash(String(password), 10);
+    const hashedPassword = await bcrypt.hash(password, 10);
 
-    const { data: newUser, error } = await supabase
+    const { data: newUser, error: insertError } = await supabase
       .from('users')
       .insert({
-        nombre: String(nombre).trim(),
-        email: cleanEmail,
+        nombre,
+        email,
         password: hashedPassword,
-        tipo_usuario: tipo_usuario || 'propietario',
+        tipo_usuario,
         fecha_registro: new Date().toISOString(),
         email_verificado: false,
       })
       .select('id, nombre, email, tipo_usuario')
       .single();
 
-    if (error || !newUser) {
-      throw error || new Error('No se pudo crear el usuario');
+    if (insertError || !newUser) {
+      console.error('Error creando usuario:', insertError);
+      res.status(500).json({
+        success: false,
+        message: 'No se pudo crear el usuario',
+      });
+      return;
     }
 
     const token = signToken({
@@ -271,8 +307,15 @@ app.post('/api/auth/register', async (req: Request, res: Response) => {
 
     res.status(201).json({
       success: true,
+      message: 'Usuario registrado correctamente',
       token,
-      user: newUser,
+      user: {
+        id: newUser.id,
+        nombre: newUser.nombre,
+        fullName: newUser.nombre,
+        email: newUser.email,
+        tipo_usuario: newUser.tipo_usuario,
+      },
     });
   } catch (error) {
     console.error('Error en registro:', error);
@@ -285,9 +328,9 @@ app.post('/api/auth/register', async (req: Request, res: Response) => {
 
 app.post('/api/auth/login', async (req: Request, res: Response) => {
   try {
-    const { email, password } = req.body ?? {};
+    const parsed = loginSchema.safeParse(req.body ?? {});
 
-    if (!email || !password) {
+    if (!parsed.success) {
       res.status(400).json({
         success: false,
         message: 'Email y contraseña son requeridos',
@@ -295,7 +338,8 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
       return;
     }
 
-    const cleanEmail = String(email).trim().toLowerCase();
+    const cleanEmail = String(parsed.data.email).trim().toLowerCase();
+    const plainPassword = String(parsed.data.password);
 
     const { data: user, error } = await supabase
       .from('users')
@@ -311,7 +355,7 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
       return;
     }
 
-    const isValidPassword = await bcrypt.compare(String(password), user.password);
+    const isValidPassword = await bcrypt.compare(plainPassword, user.password);
 
     if (!isValidPassword) {
       res.status(401).json({
@@ -333,6 +377,7 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
       user: {
         id: user.id,
         nombre: user.nombre,
+        fullName: user.nombre,
         email: user.email,
         tipo_usuario: user.tipo_usuario,
       },
