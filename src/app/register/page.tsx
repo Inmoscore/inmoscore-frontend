@@ -33,6 +33,7 @@ export default function RegisterPage() {
   const [success, setSuccess] = useState("");
 
   const API_URL = process.env.NEXT_PUBLIC_API_URL;
+  const isFormLocked = loading || !!success;
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
@@ -46,7 +47,7 @@ export default function RegisterPage() {
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
 
-    if (loading) return;
+    if (isFormLocked) return;
 
     setError("");
     setSuccess("");
@@ -163,7 +164,9 @@ export default function RegisterPage() {
               value={form.fullName}
               onChange={handleChange}
               autoComplete="name"
-              className="w-full rounded-lg border border-gray-300 px-4 py-2 text-gray-900 outline-none focus:border-blue-600"
+              required
+              disabled={isFormLocked}
+              className="w-full rounded-lg border border-gray-300 px-4 py-2 text-gray-900 outline-none focus:border-blue-600 disabled:cursor-not-allowed disabled:bg-gray-100"
               placeholder="Tu nombre completo"
             />
           </div>
@@ -182,7 +185,9 @@ export default function RegisterPage() {
               value={form.email}
               onChange={handleChange}
               autoComplete="email"
-              className="w-full rounded-lg border border-gray-300 px-4 py-2 text-gray-900 outline-none focus:border-blue-600"
+              required
+              disabled={isFormLocked}
+              className="w-full rounded-lg border border-gray-300 px-4 py-2 text-gray-900 outline-none focus:border-blue-600 disabled:cursor-not-allowed disabled:bg-gray-100"
               placeholder="correo@ejemplo.com"
             />
           </div>
@@ -201,7 +206,8 @@ export default function RegisterPage() {
               value={form.phone}
               onChange={handleChange}
               autoComplete="tel"
-              className="w-full rounded-lg border border-gray-300 px-4 py-2 text-gray-900 outline-none focus:border-blue-600"
+              disabled={isFormLocked}
+              className="w-full rounded-lg border border-gray-300 px-4 py-2 text-gray-900 outline-none focus:border-blue-600 disabled:cursor-not-allowed disabled:bg-gray-100"
               placeholder="3001234567"
             />
           </div>
@@ -220,7 +226,9 @@ export default function RegisterPage() {
               value={form.password}
               onChange={handleChange}
               autoComplete="new-password"
-              className="w-full rounded-lg border border-gray-300 px-4 py-2 text-gray-900 outline-none focus:border-blue-600"
+              required
+              disabled={isFormLocked}
+              className="w-full rounded-lg border border-gray-300 px-4 py-2 text-gray-900 outline-none focus:border-blue-600 disabled:cursor-not-allowed disabled:bg-gray-100"
               placeholder="Mínimo 6 caracteres"
             />
           </div>
@@ -239,7 +247,9 @@ export default function RegisterPage() {
               value={form.confirmPassword}
               onChange={handleChange}
               autoComplete="new-password"
-              className="w-full rounded-lg border border-gray-300 px-4 py-2 text-gray-900 outline-none focus:border-blue-600"
+              required
+              disabled={isFormLocked}
+              className="w-full rounded-lg border border-gray-300 px-4 py-2 text-gray-900 outline-none focus:border-blue-600 disabled:cursor-not-allowed disabled:bg-gray-100"
               placeholder="Repite tu contraseña"
             />
           </div>
@@ -258,10 +268,14 @@ export default function RegisterPage() {
 
           <button
             type="submit"
-            disabled={loading}
+            disabled={isFormLocked}
             className="w-full rounded-lg bg-blue-700 px-4 py-2 font-semibold text-white transition hover:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {loading ? "Registrando..." : "Registrarme"}
+            {success
+              ? "Cuenta creada"
+              : loading
+              ? "Registrando..."
+              : "Registrarme"}
           </button>
         </form>
 
