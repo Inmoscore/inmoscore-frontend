@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { setSession } from "@/lib/auth";
 
 type RegisterResponse = {
   success?: boolean;
@@ -121,8 +122,7 @@ export default function RegisterPage() {
         throw new Error("La respuesta del servidor está incompleta");
       }
 
-      localStorage.setItem("token", data.token);
-      localStorage.setItem("user", JSON.stringify(data.user));
+      setSession(data.token, data.user);
 
       setSuccess("Cuenta creada correctamente");
 

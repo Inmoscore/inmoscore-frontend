@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { clearSession, getToken } from '@/lib/auth';
 
 type ResultadoBusqueda = {
   success: boolean;
@@ -24,14 +25,30 @@ export default function BuscarPage() {
   const [cargando, setCargando] = useState(false);
   const [error, setError] = useState('');
 
-  const buscarArrendatario = async (e: React.FormEvent) => {
+  const API_URL = process.env.NEXT_PUBLIC_API_URL;
+
+  const handleLogout = () => {
+    clearSession();
+    router.push('/login');
+  };
+
+  const handleGoHome = () => {
+    router.push('/');
+  };
+
+  const buscarArrendatario = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setCargando(true);
     setError('');
     setResultado(null);
 
     try {
-      const token = localStorage.getItem('token');
+      if (!API_URL) {
+        setError('La URL del backend no está configurada');
+        return;
+      }
+
+      const token = getToken();
 
       if (!token) {
         setError('Debes iniciar sesión para realizar búsquedas');
@@ -40,7 +57,7 @@ export default function BuscarPage() {
       }
 
       const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/api/tenants/search?cedula=${encodeURIComponent(cedula)}`,
+        `${API_URL}/api/tenants/search?cedula=${encodeURIComponent(cedula.trim())}`,
         {
           method: 'GET',
           headers: {
@@ -68,9 +85,34 @@ export default function BuscarPage() {
   return (
     <div className="min-h-screen bg-gray-100 p-8">
       <div className="max-w-3xl mx-auto">
-        <h1 className="text-3xl font-bold mb-6 text-center">Buscar Arrendatario</h1>
+        <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <h1 className="text-3xl font-bold text-center sm:text-left">
+            Buscar Arrendatario
+          </h1>
 
-        <form onSubmit={buscarArrendatario} className="bg-white p-6 rounded-lg shadow-md mb-6">
+          <div className="flex gap-3">
+            <button
+              type="button"
+              onClick={handleGoHome}
+              className="rounded-lg bg-gray-700 px-4 py-2 font-semibold text-white hover:bg-gray-800"
+            >
+              Inicio
+            </button>
+
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="rounded-lg bg-red-600 px-4 py-2 font-semibold text-white hover:bg-red-700"
+            >
+              Cerrar sesión
+            </button>
+          </div>
+        </div>
+
+        <form
+          onSubmit={buscarArrendatario}
+          className="bg-white p-6 rounded-lg shadow-md mb-6"
+        >
           <div className="mb-4">
             <label className="block text-gray-700 font-bold mb-2">
               Número de Cédula
@@ -82,13 +124,14 @@ export default function BuscarPage() {
               className="w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
               placeholder="Ingrese la cédula"
               required
+              disabled={cargando}
             />
           </div>
 
           <button
             type="submit"
             disabled={cargando}
-            className="w-full bg-blue-600 text-white font-bold py-2 px-4 rounded-lg hover:bg-blue-700 disabled:bg-gray-400"
+            className="w-full bg-blue-600 text-white font-bold py-2 px-4 rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
           >
             {cargando ? 'Buscando...' : 'Buscar'}
           </button>
@@ -111,7 +154,7 @@ export default function BuscarPage() {
             <div className="bg-white p-6 rounded-lg shadow-md">
               <h2 className="text-2xl font-bold mb-4">Resultado</h2>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                 <p><strong>Nombre:</strong> {resultado.nombre}</p>
                 <p><strong>Cédula:</strong> {resultado.cedula}</p>
                 <p><strong>Score:</strong> {resultado.score}</p>
@@ -136,7 +179,9 @@ export default function BuscarPage() {
                   ))}
                 </div>
               ) : (
-                <p className="text-gray-600">No hay reportes aprobados para este arrendatario.</p>
+                <p className="text-gray-600">
+                  No hay reportes aprobados para este arrendatario.
+                </p>
               )}
             </div>
 
@@ -155,7 +200,9 @@ export default function BuscarPage() {
                   ))}
                 </div>
               ) : (
-                <p className="text-gray-600">No se encontraron procesos judiciales.</p>
+                <p className="text-gray-600">
+                  No se encontraron procesos judiciales.
+                </p>
               )}
             </div>
           </div>

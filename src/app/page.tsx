@@ -2,74 +2,93 @@
 
 import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
+import { clearSession, hasSession } from '@/lib/auth';
 
 export default function Home() {
   const router = useRouter();
   const [logueado, setLogueado] = useState(false);
 
   useEffect(() => {
-    const token = localStorage.getItem('token');
-    setLogueado(!!token);
+    setLogueado(hasSession());
   }, []);
 
   const handleBuscar = () => {
     if (!logueado) {
-      router.push('/login');
-    } else {
-      router.push('/buscar');
+      router.push('/login?redirect=/buscar');
+      return;
     }
+
+    router.push('/buscar');
   };
 
   const handleReportar = () => {
     if (!logueado) {
-      router.push('/login');
-    } else {
-      router.push('/reportar');
+      router.push('/login?redirect=/reportar');
+      return;
     }
+
+    router.push('/reportar');
   };
 
   const handleLogout = () => {
-    localStorage.removeItem('token');
-    localStorage.removeItem('user');
+    clearSession();
     setLogueado(false);
+    router.push('/login');
+  };
+
+  const handleLogin = () => {
+    router.push('/login');
+  };
+
+  const handleRegister = () => {
+    router.push('/register');
   };
 
   return (
-    <main className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-600 to-blue-800">
-      <div className="text-center text-white">
-        <h1 className="text-5xl font-bold mb-4">InmoScore</h1>
+    <main className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-600 to-blue-800 px-6">
+      <div className="max-w-2xl text-center text-white">
+        <h1 className="mb-4 text-5xl font-bold">InmoScore</h1>
+
         <p className="mb-8 text-lg">
           Consulta el historial de riesgo de arrendatarios en Colombia
         </p>
 
-        <div className="flex gap-4 justify-center mb-6">
+        <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:justify-center">
           <button
             onClick={handleBuscar}
-            className="px-6 py-3 bg-white text-blue-700 rounded font-semibold"
+            className="rounded-lg bg-white px-6 py-3 font-semibold text-blue-700 hover:bg-gray-100"
           >
             Buscar Arrendatario
           </button>
 
           <button
             onClick={handleReportar}
-            className="px-6 py-3 border border-white rounded font-semibold"
+            className="rounded-lg border border-white px-6 py-3 font-semibold text-white hover:bg-white hover:text-blue-700"
           >
             Reportar
           </button>
         </div>
 
-        {/* 🔐 Estado de sesión */}
         {!logueado ? (
-          <button
-            onClick={() => router.push('/login')}
-            className="underline"
-          >
-            Iniciar sesión
-          </button>
+          <div className="flex flex-col gap-3 sm:flex-row sm:justify-center">
+            <button
+              onClick={handleLogin}
+              className="rounded-lg bg-blue-900 px-6 py-3 font-semibold text-white hover:bg-blue-950"
+            >
+              Iniciar sesión
+            </button>
+
+            <button
+              onClick={handleRegister}
+              className="rounded-lg border border-white px-6 py-3 font-semibold text-white hover:bg-white hover:text-blue-700"
+            >
+              Registrarse
+            </button>
+          </div>
         ) : (
           <button
             onClick={handleLogout}
-            className="underline text-red-200"
+            className="rounded-lg bg-red-600 px-6 py-3 font-semibold text-white hover:bg-red-700"
           >
             Cerrar sesión
           </button>
