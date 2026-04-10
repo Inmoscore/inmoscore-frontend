@@ -97,14 +97,30 @@ const loginSchema = z.object({
 
 app.use(helmet());
 
+const allowedOrigins = [
+  'http://localhost:3000',
+  'http://localhost:3002',
+  'https://inmoscore-frontend.vercel.app',
+];
+
 app.use(
   cors({
-    origin: [
-      'http://localhost:3000',
-      'http://localhost:3002',
-      'https://inmoscore-frontend.vercel.app',
-    ],
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    origin: (origin, callback) => {
+      if (!origin) {
+        return callback(null, true);
+      }
+
+      const isAllowedOrigin = allowedOrigins.includes(origin);
+      const isVercelPreview = origin.endsWith('.vercel.app');
+
+      if (isAllowedOrigin || isVercelPreview) {
+        return callback(null, true);
+      }
+
+      console.warn(`❌ CORS bloqueó el origen: ${origin}`);
+      return callback(new Error(`Origen no permitido por CORS: ${origin}`));
+    },
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
     credentials: true,
   })
@@ -487,7 +503,6 @@ app.get('/api/tenants/search', authenticateToken, async (req: AuthRequest, res: 
   }
 });
 
-// Ruta adicional opcional para detalle simple por cédula
 app.get('/api/tenants/:cedula', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
     const { cedula } = req.params;
