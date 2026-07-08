@@ -22,7 +22,7 @@ export function scopedTable(
   if (ctx.isPlatformAdmin) {
     return supabase.from(table);
   }
-  return supabase.from(table).select('*').eq('organization_id', ctx.organizationId);
+  return supabase.from(table).select('id').eq('organization_id', ctx.organizationId);
 }
 
 export function assertTenantOrg(

@@ -19,6 +19,8 @@
     "express-validator": "^7.0.1",
     "helmet": "^7.1.0",
     "jsonwebtoken": "^9.0.3",
+    "otplib": "^13.4.0",
+    "stripe": "^22.1.0",
     "typescript": "^5.2.2",
     "zod": "^4.3.6"
   },

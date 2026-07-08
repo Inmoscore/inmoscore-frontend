@@ -1,0 +1,179 @@
+{
+  "info": {
+    "name": "InmoScore API - Testing",
+    "_postman_id": "inmoscore-collection-001",
+    "description": "Colección mínima para probar anti-abuso en reports",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:3001"
+    },
+    {
+      "key": "token",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "🔐 Login",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"TU_EMAIL_AQUI\",\n  \"password\": \"TU_PASSWORD_AQUI\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/auth/login",
+          "host": ["{{base_url}}"],
+          "path": ["api", "auth", "login"]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "const json = pm.response.json();",
+              "if (json.token) {",
+              "  pm.collectionVariables.set('token', json.token);",
+              "}"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "✅ Crear Reporte (1)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"nombre\": \"Persona Uno\",\n  \"cedula\": \"11111111\",\n  \"telefono\": \"3001234567\",\n  \"ciudad\": \"Bogota\",\n  \"tipo_problema\": \"Incumplimiento de pago\",\n  \"descripcion\": \"Descripción suficientemente larga para superar la validación mínima de veinte caracteres.\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/reports",
+          "host": ["{{base_url}}"],
+          "path": ["api", "reports"]
+        }
+      }
+    },
+    {
+      "name": "⚠️ Duplicado (debe dar 409)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"nombre\": \"Persona Uno\",\n  \"cedula\": \"11111111\",\n  \"telefono\": \"3001234567\",\n  \"ciudad\": \"Bogota\",\n  \"tipo_problema\": \"Incumplimiento de pago\",\n  \"descripcion\": \"Intento duplicado para validar control de abuso.\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/reports",
+          "host": ["{{base_url}}"],
+          "path": ["api", "reports"]
+        }
+      }
+    },
+    {
+      "name": "✅ Crear Reporte (2)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"nombre\": \"Persona Dos\",\n  \"cedula\": \"22222222\",\n  \"telefono\": \"3001234567\",\n  \"ciudad\": \"Bogota\",\n  \"tipo_problema\": \"Daños al inmueble\",\n  \"descripcion\": \"Descripción suficientemente larga para superar la validación mínima de veinte caracteres.\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/reports",
+          "host": ["{{base_url}}"],
+          "path": ["api", "reports"]
+        }
+      }
+    },
+    {
+      "name": "✅ Crear Reporte (3)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"nombre\": \"Persona Tres\",\n  \"cedula\": \"33333333\",\n  \"telefono\": \"3001234567\",\n  \"ciudad\": \"Bogota\",\n  \"tipo_problema\": \"Incumplimiento de contrato\",\n  \"descripcion\": \"Descripción suficientemente larga para superar la validación mínima de veinte caracteres.\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/reports",
+          "host": ["{{base_url}}"],
+          "path": ["api", "reports"]
+        }
+      }
+    },
+    {
+      "name": "🚫 Límite 24h (debe dar 429)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"nombre\": \"Persona Cuatro\",\n  \"cedula\": \"44444444\",\n  \"telefono\": \"3001234567\",\n  \"ciudad\": \"Bogota\",\n  \"tipo_problema\": \"Subarriendo no autorizado\",\n  \"descripcion\": \"Descripción suficientemente larga para superar la validación mínima de veinte caracteres.\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/reports",
+          "host": ["{{base_url}}"],
+          "path": ["api", "reports"]
+        }
+      }
+    }
+  ]
+}
