@@ -4,10 +4,8 @@ import Link from "next/link";
 import { useActionState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { CheckCircle2, Loader2 } from "lucide-react";
-import {
-  completePasswordReset,
-  initialResetPasswordState,
-} from "./actions";
+import { completePasswordReset } from "./actions";
+import { initialResetPasswordState } from "./resetPasswordState";
 
 export default function ResetPasswordForm() {
   const router = useRouter();

@@ -8,16 +8,7 @@ import {
   requireRecoveryFlowSecret,
 } from "../../lib/recoveryCookies.server";
 import { createSupabaseServerClient } from "../../lib/supabaseServer";
-
-export type ResetPasswordActionState = {
-  status: "idle" | "error" | "success";
-  message: string;
-};
-
-export const initialResetPasswordState: ResetPasswordActionState = {
-  status: "idle",
-  message: "",
-};
+import type { ResetPasswordActionState } from "./resetPasswordState";
 
 const secureCookies = process.env.NODE_ENV === "production";
 
