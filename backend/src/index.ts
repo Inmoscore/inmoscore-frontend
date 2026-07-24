@@ -27,6 +27,12 @@ import { SCORE_CONFIG } from './scoring/core/config';
 import { calculateAndStoreScore, getCurrentScore } from './scoring/services/ScoreService';
 import { AdminAuditSeverity, logAdminAction } from './lib/adminAudit';
 import { logAuthenticationAudit } from './lib/authenticationAudit';
+import {
+  passwordResetCompleteSchema,
+  synchronizeRecoveredPassword,
+  verifyPasswordWithAnonymousClient,
+} from './lib/passwordRecovery';
+import { appendPublicPath, resolvePublicFrontendUrl } from './lib/publicUrl';
 import { logLegalReportAudit } from './lib/legalReportAudit';
 import { logSecurityEvent } from './securityAudit';
 import {
@@ -98,12 +104,15 @@ const {
   PORT = '3001',
   SUPABASE_URL,
   SUPABASE_SERVICE_ROLE_KEY,
+  SUPABASE_ANON_KEY,
   JWT_SECRET,
 } = process.env;
 
-if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !JWT_SECRET) {
+if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !SUPABASE_ANON_KEY || !JWT_SECRET) {
   console.error('❌ Error: faltan variables requeridas en backend/.env');
-  console.error('Requeridas: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, JWT_SECRET');
+  console.error(
+    'Requeridas: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_ANON_KEY, JWT_SECRET'
+  );
   process.exit(1);
 }
 
@@ -137,6 +146,8 @@ interface JwtPayload {
 interface AuthRequest extends Request {
   user?: JwtPayload;
 }
+
+const PUBLIC_FRONTEND_URL = resolvePublicFrontendUrl(process.env);
 
 type IdentityGateRow = {
   id: string;
@@ -1289,10 +1300,6 @@ const passwordResetRequestSchema = z.object({
   turnstileToken: z.string().trim().min(1).optional(),
 });
 
-const passwordResetSuccessAuditSchema = z.object({
-  source: z.literal('reset-password').optional(),
-});
-
 const changePasswordSchema = z.object({
   current_password: z.string().min(1, 'La contrasena actual es requerida').optional(),
   new_password: z.string().min(8, 'La nueva contrasena debe tener al menos 8 caracteres'),
@@ -1808,6 +1815,39 @@ app.post(
   '/api/stripe/webhook',
   express.raw({ type: 'application/json' }),
   stripeWebhookHandler
+);
+
+const passwordResetCompleteLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: 'No se pudo completar la recuperacion. Intenta nuevamente mas tarde.',
+  },
+});
+
+const passwordResetCompleteJsonParser = express.json({ limit: '2kb', strict: true });
+
+function parsePasswordResetCompleteBody(req: Request, res: Response, next: NextFunction) {
+  passwordResetCompleteJsonParser(req, res, (error?: unknown) => {
+    if (error) {
+      res.status(400).json({
+        success: false,
+        message: 'No se pudo completar la recuperacion.',
+      });
+      return;
+    }
+    next();
+  });
+}
+
+app.post(
+  '/api/auth/password-reset/complete',
+  passwordResetCompleteLimiter,
+  parsePasswordResetCompleteBody,
+  passwordResetCompleteHandler
 );
 
 app.use(express.json({ limit: '1mb' }));
@@ -2376,23 +2416,6 @@ function getOptionalAuthenticatedUser(req: Request): JwtPayload | null {
   }
 }
 
-async function getSupabaseAuthenticatedUser(req: Request) {
-  const authHeader = req.headers.authorization;
-  const token = authHeader?.startsWith('Bearer ') ? authHeader.split(' ')[1] : null;
-
-  if (!token) {
-    return { user: null, error: 'missing_supabase_access_token' };
-  }
-
-  const { data, error } = await supabase.auth.getUser(token);
-
-  if (error || !data.user) {
-    return { user: null, error: 'invalid_supabase_access_token' };
-  }
-
-  return { user: data.user, error: null };
-}
-
 function calculateDataSubjectRequestDueAt(requestType: DataSubjectRequestType): string {
   const dueAt = new Date();
   // Foundation phase: simple calendar-day approximation. Replace with a Colombian
@@ -2443,12 +2466,7 @@ function buildSafeDocumentMetadata(document: SecureDocumentAccessMetadata) {
 }
 
 function buildPublicUrl(pathname: string): string {
-  const baseUrl =
-    process.env.FRONTEND_URL ||
-    process.env.NEXT_PUBLIC_APP_URL ||
-    process.env.PUBLIC_APP_URL ||
-    'http://localhost:3000';
-  return `${baseUrl.replace(/\/+$/, '')}${pathname.startsWith('/') ? pathname : `/${pathname}`}`;
+  return appendPublicPath(PUBLIC_FRONTEND_URL, pathname);
 }
 
 function normalizeRegistrationDocumentType(value: unknown): string {
@@ -6176,9 +6194,8 @@ app.post('/api/auth/password-reset', async (req: Request, res: Response) => {
   }
 });
 
-app.post('/api/auth/password-reset/success-audit', async (req: Request, res: Response) => {
-  const parsed = passwordResetSuccessAuditSchema.safeParse(req.body ?? {});
-
+async function passwordResetCompleteHandler(req: Request, res: Response) {
+  const parsed = passwordResetCompleteSchema.safeParse(req.body ?? {});
   if (!parsed.success) {
     await logAuthenticationAudit({
       event_type: 'password.reset.success',
@@ -6186,75 +6203,123 @@ app.post('/api/auth/password-reset/success-audit', async (req: Request, res: Res
       failure_reason: 'invalid_payload',
       request: buildAuthenticationAuditRequest(req),
     });
-    res.status(400).json({ success: false, message: 'Payload invalido' });
+    res.status(400).json({
+      success: false,
+      message: 'No se pudo completar la recuperacion.',
+    });
+    return;
+  }
+
+  const authorization = req.headers.authorization;
+  const accessToken = authorization?.startsWith('Bearer ')
+    ? authorization.slice('Bearer '.length).trim()
+    : '';
+
+  if (!accessToken) {
+    await logAuthenticationAudit({
+      event_type: 'password.reset.success',
+      event_status: 'failed',
+      failure_reason: 'missing_supabase_access_token',
+      request: buildAuthenticationAuditRequest(req),
+    });
+    res.status(401).json({
+      success: false,
+      message: 'No se pudo completar la recuperacion.',
+    });
     return;
   }
 
   try {
-    const { user: authUser, error: authError } = await getSupabaseAuthenticatedUser(req);
+    const result = await synchronizeRecoveredPassword(
+      accessToken,
+      parsed.data.new_password,
+      {
+        validateAccessToken: async (token) => {
+          const { data, error } = await supabase.auth.getUser(token);
+          const email = data.user?.email?.trim().toLowerCase() || '';
+          if (error || !data.user?.id || !email) return null;
+          return { id: data.user.id, email };
+        },
+        findLocalUser: async (authUserId) => {
+          const linkedLookup = await supabase
+            .from('users')
+            .select('id')
+            .eq('auth_user_id', authUserId)
+            .maybeSingle();
+          if (linkedLookup.error) throw linkedLookup.error;
+          if (linkedLookup.data) return linkedLookup.data;
 
-    if (!authUser) {
-      await logAuthenticationAudit({
-        event_type: 'password.reset.success',
-        event_status: 'failed',
-        failure_reason: authError || 'invalid_supabase_access_token',
-        request: buildAuthenticationAuditRequest(req),
+          const matchingIdLookup = await supabase
+            .from('users')
+            .select('id')
+            .eq('id', authUserId)
+            .maybeSingle();
+          if (matchingIdLookup.error) throw matchingIdLookup.error;
+          return matchingIdLookup.data;
+        },
+        verifySupabasePassword: async ({ email, password, expectedUserId }) =>
+          verifyPasswordWithAnonymousClient({
+            supabaseUrl: SUPABASE_URL as string,
+            supabaseAnonKey: SUPABASE_ANON_KEY as string,
+            email,
+            password,
+            expectedUserId,
+          }),
+        hashPassword: (password) => bcrypt.hash(password, 10),
+        updateLocalPassword: async (userId, passwordHash) => {
+          const { data, error } = await supabase
+            .from('users')
+            .update({ password: passwordHash })
+            .eq('id', userId)
+            .select('id')
+            .maybeSingle();
+          return !error && Boolean(data?.id);
+        },
+        audit: async ({ userId, email, status, failureReason }) => {
+          await logAuthenticationAudit({
+            user_id: userId,
+            email,
+            event_type: 'password.reset.success',
+            event_status: status,
+            failure_reason: failureReason || null,
+            request: buildAuthenticationAuditRequest(req),
+          });
+        },
+      }
+    );
+
+    if (!result.ok) {
+      console.warn('[AUTH_PASSWORD_RESET_COMPLETE_FAILED]', {
+        reason: result.reason,
+        request_id: getRequestId(req),
       });
-      res.status(401).json({ success: false, message: 'Sesion invalida' });
+      res.status(result.reason === 'invalid_session' ? 401 : 409).json({
+        success: false,
+        message: 'No se pudo completar la recuperacion. Intenta nuevamente.',
+      });
       return;
     }
 
-    const authEmail = authUser.email ? authUser.email.trim().toLowerCase() : null;
-    let { data: user, error: userLookupError } = await supabase
-      .from('users')
-      .select('id, email')
-      .eq('auth_user_id', authUser.id)
-      .maybeSingle();
-
-    if (!userLookupError && !user && authEmail) {
-      const fallbackLookup = await supabase
-        .from('users')
-        .select('id, email')
-        .eq('email', authEmail)
-        .maybeSingle();
-      user = fallbackLookup.data;
-      userLookupError = fallbackLookup.error;
-    }
-
-    if (userLookupError) {
-      await logAuthenticationAudit({
-        email: authEmail,
-        event_type: 'password.reset.success',
-        event_status: 'failed',
-        failure_reason: 'user_lookup_error',
-        request: buildAuthenticationAuditRequest(req),
-      });
-      res.status(200).json({ success: true });
-      return;
-    }
-
-    await logAuthenticationAudit({
-      user_id: user?.id || null,
-      email: user?.email || authEmail,
-      event_type: 'password.reset.success',
-      event_status: 'success',
-      request: buildAuthenticationAuditRequest(req),
+    res.json({
+      success: true,
+      message: 'Contrasena actualizada correctamente',
     });
-
-    res.json({ success: true });
-  } catch (error) {
-    console.error('[AUTH_PASSWORD_RESET_SUCCESS_AUDIT_ERROR]', {
-      error: error instanceof Error ? error.message : 'unknown',
+  } catch {
+    console.error('[AUTH_PASSWORD_RESET_COMPLETE_ERROR]', {
+      request_id: getRequestId(req),
     });
     await logAuthenticationAudit({
       event_type: 'password.reset.success',
       event_status: 'failed',
-      failure_reason: 'password_reset_success_audit_error',
+      failure_reason: 'password_reset_complete_error',
       request: buildAuthenticationAuditRequest(req),
     });
-    res.status(200).json({ success: true });
+    res.status(500).json({
+      success: false,
+      message: 'No se pudo completar la recuperacion. Intenta nuevamente.',
+    });
   }
-});
+}
 
 app.post('/api/auth/change-password', authenticateToken, async (req: AuthRequest, res: Response) => {
   const parsed = changePasswordSchema.safeParse(req.body ?? {});
