@@ -19,7 +19,7 @@ import {
 } from "../../../lib/supabaseServer.ts";
 
 type VerifyOtpResult = {
-  data: { user: User | null; session: Session | null };
+  data: { user: User | null; session: Session | null } | null | undefined;
   error: unknown | null;
 };
 
@@ -33,7 +33,10 @@ export const RECOVERY_FAILURE_REASONS = [
   "cookie_decrypt_failed",
   "cookie_expired",
   "otp_rejected",
-  "session_missing",
+  "verifyotp_null_data",
+  "verifyotp_user_missing",
+  "verifyotp_session_missing",
+  "verifyotp_session_id_missing",
   "session_cookie_failed",
   "grant_failed",
   "unexpected_error",
@@ -288,23 +291,25 @@ export async function handleConfirmPost(
       return createRecoveryFailureResponse(request, "otp_rejected");
     }
 
-    const sessionId = data.session?.access_token
-      ? extractSupabaseSessionId(data.session.access_token)
-      : null;
+    if (!data) {
+      logRecoveryStage("RECOVERY_CONFIRM_SESSION_MISSING", requestId);
+      return createRecoveryFailureResponse(request, "verifyotp_null_data");
+    }
 
     if (!data.user?.id) {
       logRecoveryStage("RECOVERY_CONFIRM_SESSION_MISSING", requestId);
-      return createRecoveryFailureResponse(request, "session_missing");
+      return createRecoveryFailureResponse(request, "verifyotp_user_missing");
     }
 
     if (!data.session?.access_token) {
       logRecoveryStage("RECOVERY_CONFIRM_SESSION_MISSING", requestId);
-      return createRecoveryFailureResponse(request, "session_missing");
+      return createRecoveryFailureResponse(request, "verifyotp_session_missing");
     }
 
+    const sessionId = extractSupabaseSessionId(data.session.access_token);
     if (!sessionId) {
       logRecoveryStage("RECOVERY_CONFIRM_SESSION_MISSING", requestId);
-      return createRecoveryFailureResponse(request, "session_missing");
+      return createRecoveryFailureResponse(request, "verifyotp_session_id_missing");
     }
 
     if (!verifyOtpOverride && !sessionCookieSetAllInvoked) {

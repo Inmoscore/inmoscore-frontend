@@ -303,7 +303,23 @@ test("thrown OTP verification exposes only otp_rejected", async () => {
   assertSafeFailureReason(response, "otp_rejected");
 });
 
-test("missing user id exposes only session_missing", async () => {
+test("null or undefined verifyOtp data exposes only verifyotp_null_data", async () => {
+  for (const data of [null, undefined]) {
+    const response = await handleConfirmPost(
+      new NextRequest("https://app.test/auth/confirm", {
+        method: "POST",
+        headers: { cookie: `${PENDING_RECOVERY_COOKIE}=${pendingCookie()}` },
+      }),
+      async () => ({
+        data,
+        error: null,
+      })
+    );
+    assertSafeFailureReason(response, "verifyotp_null_data");
+  }
+});
+
+test("missing user id exposes only verifyotp_user_missing", async () => {
   const response = await handleConfirmPost(
     new NextRequest("https://app.test/auth/confirm", {
       method: "POST",
@@ -317,10 +333,10 @@ test("missing user id exposes only session_missing", async () => {
       error: null,
     })
   );
-  assertSafeFailureReason(response, "session_missing");
+  assertSafeFailureReason(response, "verifyotp_user_missing");
 });
 
-test("missing session access token exposes only session_missing", async () => {
+test("missing session access token exposes only verifyotp_session_missing", async () => {
   const response = await handleConfirmPost(
     new NextRequest("https://app.test/auth/confirm", {
       method: "POST",
@@ -334,10 +350,10 @@ test("missing session access token exposes only session_missing", async () => {
       error: null,
     })
   );
-  assertSafeFailureReason(response, "session_missing");
+  assertSafeFailureReason(response, "verifyotp_session_missing");
 });
 
-test("missing session id exposes only session_missing", async () => {
+test("missing session id exposes only verifyotp_session_id_missing", async () => {
   const accessTokenWithoutSessionId = [
     Buffer.from("{}").toString("base64url"),
     Buffer.from("{}").toString("base64url"),
@@ -356,7 +372,7 @@ test("missing session id exposes only session_missing", async () => {
       error: null,
     })
   );
-  assertSafeFailureReason(response, "session_missing");
+  assertSafeFailureReason(response, "verifyotp_session_id_missing");
 });
 
 test("grant creation failure exposes only grant_failed", async () => {
