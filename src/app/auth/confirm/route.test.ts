@@ -43,6 +43,22 @@ function restoreEnv(name: string, value: string | undefined): void {
   }
 }
 
+async function successfulConfirmPost(headers: Record<string, string>): Promise<Response> {
+  return handleConfirmPost(
+    new NextRequest("https://app.test/auth/confirm", {
+      method: "POST",
+      headers,
+    }),
+    async () => ({
+      data: {
+        user: { id: "user-1" } as never,
+        session: { access_token: token("session-1") } as never,
+      },
+      error: null,
+    })
+  );
+}
+
 function assertSafeFailureReason(
   response: Response,
   expectedReason: (typeof RECOVERY_FAILURE_REASONS)[number]
@@ -134,6 +150,83 @@ test("clean interstitial HTML never contains token_hash or a hidden credential",
   assert.equal(html.includes("token_hash"), false);
   assert.equal(html.includes("sensitive-token"), false);
   assert.equal(/type=["']hidden/i.test(html), false);
+});
+
+test("POST with matching Origin continues the recovery flow", async () => {
+  const response = await successfulConfirmPost({
+    cookie: `${PENDING_RECOVERY_COOKIE}=${pendingCookie()}`,
+    origin: "https://app.test",
+  });
+  assert.equal(response.headers.get("location"), "https://app.test/reset-password");
+});
+
+test("POST with mismatched Origin exposes only origin_mismatch and logs sanitized hosts", async () => {
+  const warnings: unknown[][] = [];
+  const originalWarn = console.warn;
+  console.warn = (...args: unknown[]) => {
+    warnings.push(args);
+  };
+
+  try {
+    const response = await handleConfirmPost(
+      new NextRequest(
+        "https://app.test/auth/confirm?diagnostic_query=private-query-value",
+        {
+          method: "POST",
+          headers: {
+            cookie: "diagnostic_cookie=private-cookie-value",
+            origin:
+              "https://external.test/private-path?token_hash=private-token-value",
+            "x-forwarded-host":
+              "Public.Example.test:8443, internal.private.example",
+            "x-forwarded-proto": "HTTPS, ftp",
+          },
+        }
+      )
+    );
+
+    assertSafeFailureReason(response, "origin_mismatch");
+  } finally {
+    console.warn = originalWarn;
+  }
+
+  assert.equal(warnings.length, 1);
+  assert.equal(warnings[0][0], "[RECOVERY_CONFIRM_ORIGIN_MISMATCH]");
+  const metadata = warnings[0][1] as Record<string, unknown>;
+  assert.deepEqual(Object.keys(metadata), [
+    "request_id",
+    "stage",
+    "timestamp",
+    "origin_host",
+    "request_host",
+    "forwarded_host",
+    "forwarded_proto",
+  ]);
+  assert.equal(metadata.stage, "RECOVERY_CONFIRM_ORIGIN_MISMATCH");
+  assert.equal(metadata.origin_host, "external.test");
+  assert.equal(metadata.request_host, "app.test");
+  assert.equal(metadata.forwarded_host, "public.example.test");
+  assert.equal(metadata.forwarded_proto, "https");
+
+  const serializedWarnings = JSON.stringify(warnings);
+  for (const forbidden of [
+    "token_hash",
+    "private-token-value",
+    "private-cookie-value",
+    "private-query-value",
+    "private-path",
+    "internal.private.example",
+    "8443",
+  ]) {
+    assert.equal(serializedWarnings.includes(forbidden), false);
+  }
+});
+
+test("POST without Origin continues the recovery flow", async () => {
+  const response = await successfulConfirmPost({
+    cookie: `${PENDING_RECOVERY_COOKIE}=${pendingCookie()}`,
+  });
+  assert.equal(response.headers.get("location"), "https://app.test/reset-password");
 });
 
 test("POST without pending cookie is rejected and expires the pending cookie", async () => {
