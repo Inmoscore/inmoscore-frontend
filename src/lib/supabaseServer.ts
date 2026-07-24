@@ -12,7 +12,7 @@ type CookieAdapter = {
   setAll?: (cookies: SupabaseCookie[]) => void;
 };
 
-function getSupabaseConfiguration() {
+export function getSupabaseConfiguration() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim().replace(/\/+$/, "");
   const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim();
   if (!url || !anonKey || !url.startsWith("https://") || !url.endsWith(".supabase.co")) {
@@ -21,8 +21,13 @@ function getSupabaseConfiguration() {
   return { url, anonKey };
 }
 
-export function createSupabaseServerClient(adapter: CookieAdapter) {
-  const { url, anonKey } = getSupabaseConfiguration();
+type SupabaseConfiguration = ReturnType<typeof getSupabaseConfiguration>;
+
+export function createSupabaseServerClient(
+  adapter: CookieAdapter,
+  configuration = getSupabaseConfiguration()
+) {
+  const { url, anonKey }: SupabaseConfiguration = configuration;
   return createServerClient(url, anonKey, {
     auth: {
       detectSessionInUrl: false,

@@ -35,6 +35,14 @@ function pendingCookie(tokenHash = "sensitive-token", now = Date.now()): string 
   );
 }
 
+function restoreEnv(name: string, value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[name];
+  } else {
+    process.env[name] = value;
+  }
+}
+
 function assertSafeFailureReason(
   response: Response,
   expectedReason: (typeof RECOVERY_FAILURE_REASONS)[number]
@@ -54,7 +62,7 @@ function assertSafeFailureReason(
     "status=401",
     "request_id",
     "token_hash",
-    "secret",
+    "secret-value",
     "user-1",
     "session-1",
   ]) {
@@ -151,6 +159,67 @@ test("invalid pending cookie exposes only cookie_decrypt_failed", async () => {
     }
   );
   assertSafeFailureReason(response, "cookie_decrypt_failed");
+});
+
+test("invalid recovery secret exposes only secret_configuration_failed", async () => {
+  const sealedPendingCookie = pendingCookie();
+  const originalSecret = process.env.RECOVERY_FLOW_SECRET;
+  process.env.RECOVERY_FLOW_SECRET = "invalid";
+
+  try {
+    const response = await handleConfirmPost(
+      new NextRequest("https://app.test/auth/confirm", {
+        method: "POST",
+        headers: { cookie: `${PENDING_RECOVERY_COOKIE}=${sealedPendingCookie}` },
+      }),
+      async () => {
+        throw new Error("must not execute");
+      }
+    );
+    assertSafeFailureReason(response, "secret_configuration_failed");
+  } finally {
+    restoreEnv("RECOVERY_FLOW_SECRET", originalSecret);
+  }
+});
+
+test("invalid Supabase configuration exposes only supabase_configuration_failed", async () => {
+  const originalUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const originalAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  process.env.NEXT_PUBLIC_SUPABASE_URL = "invalid";
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = "test-only-anon-key";
+
+  try {
+    const response = await handleConfirmPost(
+      new NextRequest("https://app.test/auth/confirm", {
+        method: "POST",
+        headers: { cookie: `${PENDING_RECOVERY_COOKIE}=${pendingCookie()}` },
+      })
+    );
+    assertSafeFailureReason(response, "supabase_configuration_failed");
+  } finally {
+    restoreEnv("NEXT_PUBLIC_SUPABASE_URL", originalUrl);
+    restoreEnv("NEXT_PUBLIC_SUPABASE_ANON_KEY", originalAnonKey);
+  }
+});
+
+test("Supabase client initialization failure exposes only supabase_client_init_failed", async () => {
+  const originalUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const originalAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  process.env.NEXT_PUBLIC_SUPABASE_URL = "https://[.supabase.co";
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = "test-only-anon-key";
+
+  try {
+    const response = await handleConfirmPost(
+      new NextRequest("https://app.test/auth/confirm", {
+        method: "POST",
+        headers: { cookie: `${PENDING_RECOVERY_COOKIE}=${pendingCookie()}` },
+      })
+    );
+    assertSafeFailureReason(response, "supabase_client_init_failed");
+  } finally {
+    restoreEnv("NEXT_PUBLIC_SUPABASE_URL", originalUrl);
+    restoreEnv("NEXT_PUBLIC_SUPABASE_ANON_KEY", originalAnonKey);
+  }
 });
 
 test("expired pending cookie is rejected without executing verifyOtp", async () => {
@@ -320,7 +389,7 @@ test("grant creation failure exposes only grant_failed", async () => {
   }
 });
 
-test("unexpected failure exposes only unexpected_error", async () => {
+test("unexpected failure after client initialization exposes only unexpected_after_client_init", async () => {
   const data = { user: { id: "user-1" } } as {
     user: { id: string };
     session?: never;
@@ -341,5 +410,5 @@ test("unexpected failure exposes only unexpected_error", async () => {
       error: null,
     })
   );
-  assertSafeFailureReason(response, "unexpected_error");
+  assertSafeFailureReason(response, "unexpected_after_client_init");
 });

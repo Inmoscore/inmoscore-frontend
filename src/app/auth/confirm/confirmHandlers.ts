@@ -13,7 +13,10 @@ import {
   sealPendingRecovery,
 } from "../../../lib/recoveryCookies.server.ts";
 import { parseAuthConfirmQuery } from "../../../lib/recoveryRedirect.ts";
-import { createSupabaseServerClient } from "../../../lib/supabaseServer.ts";
+import {
+  createSupabaseServerClient,
+  getSupabaseConfiguration,
+} from "../../../lib/supabaseServer.ts";
 
 type VerifyOtpResult = {
   data: { user: User | null; session: Session | null };
@@ -34,6 +37,10 @@ export const RECOVERY_FAILURE_REASONS = [
   "session_cookie_failed",
   "grant_failed",
   "unexpected_error",
+  "secret_configuration_failed",
+  "supabase_configuration_failed",
+  "supabase_client_init_failed",
+  "unexpected_after_client_init",
 ] as const;
 
 export type RecoveryFailureReason = (typeof RECOVERY_FAILURE_REASONS)[number];
@@ -206,6 +213,12 @@ export async function handleConfirmPost(
   let secret: string;
   try {
     secret = requireRecoveryFlowSecret();
+  } catch {
+    logRecoveryStage("RECOVERY_CONFIRM_COOKIE_DECRYPT_FAILED", requestId);
+    return createRecoveryFailureResponse(request, "secret_configuration_failed");
+  }
+
+  try {
     pendingResult = inspectPendingRecovery(pendingCookie, secret);
   } catch {
     logRecoveryStage("RECOVERY_CONFIRM_COOKIE_DECRYPT_FAILED", requestId);
@@ -228,15 +241,33 @@ export async function handleConfirmPost(
     let verifyOtp = verifyOtpOverride;
     let sessionCookieSetAllInvoked = false;
     if (!verifyOtp) {
-      const supabase = createSupabaseServerClient({
-        getAll: () => request.cookies.getAll(),
-        setAll: (cookies) => {
-          sessionCookieSetAllInvoked = true;
-          cookies.forEach(({ name, value, options }) => {
-            response.cookies.set(name, value, options);
-          });
-        },
-      });
+      let configuration;
+      try {
+        configuration = getSupabaseConfiguration();
+      } catch (error) {
+        logRecoveryStage("RECOVERY_CONFIRM_OTP_REJECTED", requestId, error);
+        return createRecoveryFailureResponse(request, "supabase_configuration_failed");
+      }
+
+      let supabase;
+      try {
+        supabase = createSupabaseServerClient(
+          {
+            getAll: () => request.cookies.getAll(),
+            setAll: (cookies) => {
+              sessionCookieSetAllInvoked = true;
+              cookies.forEach(({ name, value, options }) => {
+                response.cookies.set(name, value, options);
+              });
+            },
+          },
+          configuration
+        );
+      } catch (error) {
+        logRecoveryStage("RECOVERY_CONFIRM_OTP_REJECTED", requestId, error);
+        return createRecoveryFailureResponse(request, "supabase_client_init_failed");
+      }
+
       verifyOtp = (params) => supabase.auth.verifyOtp(params);
     }
 
@@ -302,6 +333,6 @@ export async function handleConfirmPost(
     return response;
   } catch (error) {
     logRecoveryStage("RECOVERY_CONFIRM_OTP_REJECTED", requestId, error);
-    return createRecoveryFailureResponse(request, "unexpected_error");
+    return createRecoveryFailureResponse(request, "unexpected_after_client_init");
   }
 }
