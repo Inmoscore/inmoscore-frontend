@@ -10,9 +10,12 @@ import {
   handleConfirmPost,
   renderConfirmHtml,
 } from "./confirmHandlers.ts";
+import { runtime } from "./route.ts";
 
 const secret = "test-only-recovery-secret-with-at-least-32-characters";
 process.env.RECOVERY_FLOW_SECRET = secret;
+
+assert.equal(runtime, "nodejs");
 
 function token(sessionId: string): string {
   return [

@@ -35,6 +35,11 @@ export type RecoveryGrant = {
   phase: RecoveryGrantPhase;
 };
 
+export type PendingRecoveryInspection =
+  | { status: "valid"; value: PendingRecoveryConfirmation }
+  | { status: "expired" }
+  | { status: "decrypt_failed" };
+
 function encode(value: string | Buffer): string {
   return Buffer.from(value).toString("base64url");
 }
@@ -80,14 +85,16 @@ export function sealPendingRecovery(
   return `v1.${encode(iv)}.${encode(ciphertext)}.${encode(tag)}`;
 }
 
-export function openPendingRecovery(
+export function inspectPendingRecovery(
   value: string,
   secret: string,
   now = Date.now()
-): PendingRecoveryConfirmation | null {
+): PendingRecoveryInspection {
   try {
     const [version, encodedIv, encodedCiphertext, encodedTag, extra] = value.split(".");
-    if (version !== "v1" || !encodedIv || !encodedCiphertext || !encodedTag || extra) return null;
+    if (version !== "v1" || !encodedIv || !encodedCiphertext || !encodedTag || extra) {
+      return { status: "decrypt_failed" };
+    }
 
     const decipher = createDecipheriv("aes-256-gcm", encryptionKey(secret), decode(encodedIv));
     decipher.setAuthTag(decode(encodedTag));
@@ -105,20 +112,33 @@ export function openPendingRecovery(
       !payload.tokenHash ||
       typeof payload.issuedAt !== "number" ||
       typeof payload.expiresAt !== "number" ||
-      payload.issuedAt > now ||
-      payload.expiresAt <= now
+      payload.issuedAt > now
     ) {
-      return null;
+      return { status: "decrypt_failed" };
     }
 
+    if (payload.expiresAt <= now) return { status: "expired" };
+
     return {
-      tokenHash: payload.tokenHash,
-      type: "recovery",
-      next: "/reset-password",
+      status: "valid",
+      value: {
+        tokenHash: payload.tokenHash,
+        type: "recovery",
+        next: "/reset-password",
+      },
     };
   } catch {
-    return null;
+    return { status: "decrypt_failed" };
   }
+}
+
+export function openPendingRecovery(
+  value: string,
+  secret: string,
+  now = Date.now()
+): PendingRecoveryConfirmation | null {
+  const result = inspectPendingRecovery(value, secret, now);
+  return result.status === "valid" ? result.value : null;
 }
 
 export function createRecoveryGrant(

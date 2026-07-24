@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { Session, User } from "@supabase/supabase-js";
 import { NextRequest, NextResponse } from "next/server.js";
 import {
@@ -7,7 +8,7 @@ import {
   RECOVERY_GRANT_TTL_SECONDS,
   createRecoveryGrant,
   extractSupabaseSessionId,
-  openPendingRecovery,
+  inspectPendingRecovery,
   requireRecoveryFlowSecret,
   sealPendingRecovery,
 } from "../../../lib/recoveryCookies.server.ts";
@@ -25,6 +26,42 @@ type VerifyRecoveryOtp = (params: {
 }) => Promise<VerifyOtpResult>;
 
 const secureCookies = process.env.NODE_ENV === "production";
+
+type SafeSupabaseError = {
+  code?: string;
+  status?: number;
+};
+
+function safeSupabaseError(error: unknown): SafeSupabaseError {
+  if (!error || typeof error !== "object") return {};
+  const candidate = error as { code?: unknown; status?: unknown };
+  const result: SafeSupabaseError = {};
+  if (typeof candidate.code === "string" && /^[A-Za-z0-9_.-]{1,80}$/.test(candidate.code)) {
+    result.code = candidate.code;
+  }
+  if (typeof candidate.status === "number" && Number.isInteger(candidate.status)) {
+    result.status = candidate.status;
+  }
+  return result;
+}
+
+function logRecoveryStage(
+  stage: string,
+  requestId: string,
+  error?: unknown
+): void {
+  const metadata = {
+    request_id: requestId,
+    stage,
+    timestamp: new Date().toISOString(),
+    ...safeSupabaseError(error),
+  };
+  if (stage === "RECOVERY_CONFIRM_SUCCESS") {
+    console.info(`[${stage}]`, metadata);
+  } else {
+    console.warn(`[${stage}]`, metadata);
+  }
+}
 
 function withSecurityHeaders(response: NextResponse): NextResponse {
   response.headers.set("Cache-Control", "no-store, max-age=0");
@@ -127,6 +164,7 @@ export async function handleConfirmPost(
   request: NextRequest,
   verifyOtpOverride?: VerifyRecoveryOtp
 ): Promise<NextResponse> {
+  const requestId = randomUUID();
   const invalidResponse = redirect(request, "/reset-password?error=invalid_link");
   deletePendingCookie(invalidResponse);
 
@@ -134,28 +172,41 @@ export async function handleConfirmPost(
   if (origin && origin !== request.nextUrl.origin) return invalidResponse;
 
   const pendingCookie = request.cookies.get(PENDING_RECOVERY_COOKIE)?.value;
-  if (!pendingCookie) return invalidResponse;
+  if (!pendingCookie) {
+    logRecoveryStage("RECOVERY_CONFIRM_COOKIE_MISSING", requestId);
+    return invalidResponse;
+  }
 
-  let pending;
+  let pendingResult;
   let secret: string;
   try {
     secret = requireRecoveryFlowSecret();
-    pending = openPendingRecovery(pendingCookie, secret);
+    pendingResult = inspectPendingRecovery(pendingCookie, secret);
   } catch {
-    console.error("[AUTH_RECOVERY_CONFIRM_CONFIGURATION_ERROR]");
+    logRecoveryStage("RECOVERY_CONFIRM_COOKIE_DECRYPT_FAILED", requestId);
     return invalidResponse;
   }
-  if (!pending) return invalidResponse;
+  if (pendingResult.status === "decrypt_failed") {
+    logRecoveryStage("RECOVERY_CONFIRM_COOKIE_DECRYPT_FAILED", requestId);
+    return invalidResponse;
+  }
+  if (pendingResult.status === "expired") {
+    logRecoveryStage("RECOVERY_CONFIRM_COOKIE_EXPIRED", requestId);
+    return invalidResponse;
+  }
+  const pending = pendingResult.value;
 
   const response = redirect(request, pending.next);
   deletePendingCookie(response);
 
   try {
     let verifyOtp = verifyOtpOverride;
+    let sessionCookieSetAllInvoked = false;
     if (!verifyOtp) {
       const supabase = createSupabaseServerClient({
         getAll: () => request.cookies.getAll(),
         setAll: (cookies) => {
+          sessionCookieSetAllInvoked = true;
           cookies.forEach(({ name, value, options }) => {
             response.cookies.set(name, value, options);
           });
@@ -164,35 +215,58 @@ export async function handleConfirmPost(
       verifyOtp = (params) => supabase.auth.verifyOtp(params);
     }
 
-    const { data, error } = await verifyOtp({
-      token_hash: pending.tokenHash,
-      type: "recovery",
-    });
+    let data: VerifyOtpResult["data"];
+    let error: VerifyOtpResult["error"];
+    try {
+      ({ data, error } = await verifyOtp({
+        token_hash: pending.tokenHash,
+        type: "recovery",
+      }));
+    } catch (verificationError) {
+      logRecoveryStage("RECOVERY_CONFIRM_OTP_REJECTED", requestId, verificationError);
+      return invalidResponse;
+    }
+
+    if (error) {
+      logRecoveryStage("RECOVERY_CONFIRM_OTP_REJECTED", requestId, error);
+      return invalidResponse;
+    }
+
     const sessionId = data.session?.access_token
       ? extractSupabaseSessionId(data.session.access_token)
       : null;
 
-    if (error || !data.user?.id || !data.session?.access_token || !sessionId) {
-      console.warn("[AUTH_RECOVERY_CONFIRM_REJECTED]", { reason: "invalid_or_expired" });
+    if (!data.user?.id || !data.session?.access_token || !sessionId) {
+      logRecoveryStage("RECOVERY_CONFIRM_SESSION_MISSING", requestId);
       return invalidResponse;
     }
 
-    response.cookies.set(
-      RECOVERY_GRANT_COOKIE,
-      createRecoveryGrant({ userId: data.user.id, sessionId }, secret),
-      {
-        httpOnly: true,
-        secure: secureCookies,
-        sameSite: "strict",
-        path: "/reset-password",
-        maxAge: RECOVERY_GRANT_TTL_SECONDS,
-        priority: "high",
-      }
-    );
-    console.info("[AUTH_RECOVERY_CONFIRM_ACCEPTED]", { user_id: data.user.id });
+    if (!verifyOtpOverride && !sessionCookieSetAllInvoked) {
+      logRecoveryStage("RECOVERY_CONFIRM_SESSION_COOKIE_FAILED", requestId);
+      return invalidResponse;
+    }
+
+    try {
+      response.cookies.set(
+        RECOVERY_GRANT_COOKIE,
+        createRecoveryGrant({ userId: data.user.id, sessionId }, secret),
+        {
+          httpOnly: true,
+          secure: secureCookies,
+          sameSite: "strict",
+          path: "/reset-password",
+          maxAge: RECOVERY_GRANT_TTL_SECONDS,
+          priority: "high",
+        }
+      );
+    } catch (grantError) {
+      logRecoveryStage("RECOVERY_CONFIRM_GRANT_FAILED", requestId, grantError);
+      return invalidResponse;
+    }
+    logRecoveryStage("RECOVERY_CONFIRM_SUCCESS", requestId);
     return response;
-  } catch {
-    console.warn("[AUTH_RECOVERY_CONFIRM_REJECTED]", { reason: "verification_error" });
+  } catch (error) {
+    logRecoveryStage("RECOVERY_CONFIRM_OTP_REJECTED", requestId, error);
     return invalidResponse;
   }
 }

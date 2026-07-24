@@ -1,6 +1,8 @@
 import type { NextRequest } from "next/server.js";
 import { handleConfirmGet, handleConfirmPost } from "./confirmHandlers.ts";
 
+export const runtime = "nodejs";
+
 export function GET(request: NextRequest) {
   return handleConfirmGet(request);
 }

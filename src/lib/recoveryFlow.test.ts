@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   PENDING_RECOVERY_TTL_SECONDS,
   createRecoveryGrant,
+  inspectPendingRecovery,
   openPendingRecovery,
   recoveryGrantMatchesSession,
   sealPendingRecovery,
@@ -75,6 +76,21 @@ test("pending recovery cookie is encrypted, authenticated and expires quickly", 
     null
   );
   assert.equal(openPendingRecovery(`${sealed}tampered`, secret, now + 1), null);
+});
+
+test("classifies pending recovery failures without exposing its contents", () => {
+  const now = Date.now();
+  const sealed = sealPendingRecovery(
+    { tokenHash: "sensitive-token", type: "recovery", next: "/reset-password" },
+    secret,
+    now
+  );
+  assert.equal(inspectPendingRecovery(sealed, secret, now).status, "valid");
+  assert.equal(
+    inspectPendingRecovery(sealed, secret, now + (PENDING_RECOVERY_TTL_SECONDS * 1000)).status,
+    "expired"
+  );
+  assert.equal(inspectPendingRecovery(`${sealed}tampered`, secret, now).status, "decrypt_failed");
 });
 
 test("normal session without a signed recovery authorization is rejected", () => {
