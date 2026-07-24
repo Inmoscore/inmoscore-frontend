@@ -34,6 +34,53 @@ function logResetPasswordStage(
   }
 }
 
+function redactSensitiveLogText(value: string): string {
+  return value
+    .replace(
+      /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi,
+      "[REDACTED_EMAIL]"
+    )
+    .replace(
+      /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g,
+      "[REDACTED_JWT]"
+    )
+    .replace(
+      /\bBearer\s+[A-Za-z0-9._~+/-]+=*/gi,
+      "Bearer [REDACTED]"
+    )
+    .replace(
+      /\b(password|token(?:_hash)?|access[_-]?token|refresh[_-]?token|cookie|grant|authorization)\b(\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi,
+      "$1$2[REDACTED]"
+    );
+}
+
+function safeUpdateErrorField(value: unknown): string | number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") return redactSensitiveLogText(value);
+  return null;
+}
+
+function logResetPasswordUpdateError(error: unknown): void {
+  const candidate =
+    error && typeof error === "object"
+      ? (error as {
+          name?: unknown;
+          status?: unknown;
+          code?: unknown;
+          message?: unknown;
+        })
+      : {};
+
+  console.error("[RESET_PASSWORD_STAGE]", {
+    stage: "RESET_PASSWORD_UPDATE_FAILED",
+    timestamp: new Date().toISOString(),
+    name: safeUpdateErrorField(candidate.name),
+    status: safeUpdateErrorField(candidate.status),
+    code: safeUpdateErrorField(candidate.code),
+    message: safeUpdateErrorField(candidate.message),
+  });
+}
+
 export async function completePasswordReset(
   _previousState: ResetPasswordActionState,
   formData: FormData
@@ -119,7 +166,7 @@ export async function completePasswordReset(
       logResetPasswordStage("RESET_PASSWORD_UPDATE_START");
       const { error: updateError } = await supabase.auth.updateUser({ password });
       if (updateError) {
-        logResetPasswordStage("RESET_PASSWORD_UPDATE_FAILED", "error");
+        logResetPasswordUpdateError(updateError);
         return genericError();
       }
       logResetPasswordStage("RESET_PASSWORD_UPDATE_SUCCESS");
