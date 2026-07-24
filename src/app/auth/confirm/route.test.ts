@@ -6,6 +6,8 @@ import {
   sealPendingRecovery,
 } from "../../../lib/recoveryCookies.server.ts";
 import {
+  RECOVERY_FAILURE_REASONS,
+  createRecoveryFailureResponse,
   handleConfirmGet,
   handleConfirmPost,
   renderConfirmHtml,
@@ -32,6 +34,43 @@ function pendingCookie(tokenHash = "sensitive-token", now = Date.now()): string 
     now
   );
 }
+
+function assertSafeFailureReason(
+  response: Response,
+  expectedReason: (typeof RECOVERY_FAILURE_REASONS)[number]
+): void {
+  const location = response.headers.get("location") || "";
+  const url = new URL(location);
+  assert.equal(url.pathname, "/reset-password");
+  assert.deepEqual(
+    [...url.searchParams.entries()],
+    [
+      ["error", "invalid_link"],
+      ["reason", expectedReason],
+    ]
+  );
+  for (const forbidden of [
+    "sensitive@example.test",
+    "status=401",
+    "request_id",
+    "token_hash",
+    "secret",
+    "user-1",
+    "session-1",
+  ]) {
+    assert.equal(location.includes(forbidden), false);
+  }
+}
+
+test("safe failure responses expose only the allowed reason codes", () => {
+  for (const reason of RECOVERY_FAILURE_REASONS) {
+    const response = createRecoveryFailureResponse(
+      new NextRequest("https://app.test/auth/confirm"),
+      reason
+    );
+    assertSafeFailureReason(response, reason);
+  }
+});
 
 test("GET stores the temporary HttpOnly cookie and redirects 303 to the clean URL", async () => {
   const response = await handleConfirmGet(
@@ -97,8 +136,21 @@ test("POST without pending cookie is rejected and expires the pending cookie", a
     }
   );
   assert.equal(response.status, 303);
-  assert.match(response.headers.get("location") || "", /invalid_link/);
+  assertSafeFailureReason(response, "cookie_missing");
   assert.match(response.headers.get("set-cookie") || "", /Max-Age=0/i);
+});
+
+test("invalid pending cookie exposes only cookie_decrypt_failed", async () => {
+  const response = await handleConfirmPost(
+    new NextRequest("https://app.test/auth/confirm", {
+      method: "POST",
+      headers: { cookie: `${PENDING_RECOVERY_COOKIE}=not-a-valid-cookie` },
+    }),
+    async () => {
+      throw new Error("must not execute");
+    }
+  );
+  assertSafeFailureReason(response, "cookie_decrypt_failed");
 });
 
 test("expired pending cookie is rejected without executing verifyOtp", async () => {
@@ -118,7 +170,7 @@ test("expired pending cookie is rejected without executing verifyOtp", async () 
     }
   );
   assert.equal(verificationCalls, 0);
-  assert.match(response.headers.get("location") || "", /invalid_link/);
+  assertSafeFailureReason(response, "cookie_expired");
 });
 
 test("valid POST executes verifyOtp once, deletes pending cookie and creates grant", async () => {
@@ -164,5 +216,130 @@ test("reused token is rejected when Supabase reports it consumed", async () => {
     }
   );
   assert.equal(verificationCalls, 1);
-  assert.match(response.headers.get("location") || "", /invalid_link/);
+  assertSafeFailureReason(response, "otp_rejected");
+});
+
+test("thrown OTP verification exposes only otp_rejected", async () => {
+  const response = await handleConfirmPost(
+    new NextRequest("https://app.test/auth/confirm", {
+      method: "POST",
+      headers: { cookie: `${PENDING_RECOVERY_COOKIE}=${pendingCookie()}` },
+    }),
+    async () => {
+      throw new Error(
+        "sensitive@example.test status=401 request_id=req-1 token_hash=secret"
+      );
+    }
+  );
+  assertSafeFailureReason(response, "otp_rejected");
+});
+
+test("missing user id exposes only session_missing", async () => {
+  const response = await handleConfirmPost(
+    new NextRequest("https://app.test/auth/confirm", {
+      method: "POST",
+      headers: { cookie: `${PENDING_RECOVERY_COOKIE}=${pendingCookie()}` },
+    }),
+    async () => ({
+      data: {
+        user: null,
+        session: { access_token: token("session-1") } as never,
+      },
+      error: null,
+    })
+  );
+  assertSafeFailureReason(response, "session_missing");
+});
+
+test("missing session access token exposes only session_missing", async () => {
+  const response = await handleConfirmPost(
+    new NextRequest("https://app.test/auth/confirm", {
+      method: "POST",
+      headers: { cookie: `${PENDING_RECOVERY_COOKIE}=${pendingCookie()}` },
+    }),
+    async () => ({
+      data: {
+        user: { id: "user-1" } as never,
+        session: null,
+      },
+      error: null,
+    })
+  );
+  assertSafeFailureReason(response, "session_missing");
+});
+
+test("missing session id exposes only session_missing", async () => {
+  const accessTokenWithoutSessionId = [
+    Buffer.from("{}").toString("base64url"),
+    Buffer.from("{}").toString("base64url"),
+    "signature",
+  ].join(".");
+  const response = await handleConfirmPost(
+    new NextRequest("https://app.test/auth/confirm", {
+      method: "POST",
+      headers: { cookie: `${PENDING_RECOVERY_COOKIE}=${pendingCookie()}` },
+    }),
+    async () => ({
+      data: {
+        user: { id: "user-1" } as never,
+        session: { access_token: accessTokenWithoutSessionId } as never,
+      },
+      error: null,
+    })
+  );
+  assertSafeFailureReason(response, "session_missing");
+});
+
+test("grant creation failure exposes only grant_failed", async () => {
+  const sealedPendingCookie = pendingCookie();
+  const originalDateNow = Date.now;
+  let dateNowCalls = 0;
+  Date.now = () => {
+    dateNowCalls += 1;
+    if (dateNowCalls === 1) return originalDateNow();
+    throw new Error("sensitive grant failure");
+  };
+
+  try {
+    const response = await handleConfirmPost(
+      new NextRequest("https://app.test/auth/confirm", {
+        method: "POST",
+        headers: { cookie: `${PENDING_RECOVERY_COOKIE}=${sealedPendingCookie}` },
+      }),
+      async () => ({
+        data: {
+          user: { id: "user-1" } as never,
+          session: { access_token: token("session-1") } as never,
+        },
+        error: null,
+      })
+    );
+    assertSafeFailureReason(response, "grant_failed");
+  } finally {
+    Date.now = originalDateNow;
+  }
+});
+
+test("unexpected failure exposes only unexpected_error", async () => {
+  const data = { user: { id: "user-1" } } as {
+    user: { id: string };
+    session?: never;
+  };
+  Object.defineProperty(data, "session", {
+    get() {
+      throw new Error("sensitive@example.test request_id=req-1");
+    },
+  });
+
+  const response = await handleConfirmPost(
+    new NextRequest("https://app.test/auth/confirm", {
+      method: "POST",
+      headers: { cookie: `${PENDING_RECOVERY_COOKIE}=${pendingCookie()}` },
+    }),
+    async () => ({
+      data: data as never,
+      error: null,
+    })
+  );
+  assertSafeFailureReason(response, "unexpected_error");
 });
