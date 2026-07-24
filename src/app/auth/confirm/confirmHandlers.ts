@@ -106,7 +106,7 @@ export async function handleConfirmGet(request: NextRequest): Promise<NextRespon
     response.cookies.set(PENDING_RECOVERY_COOKIE, sealedPending, {
       httpOnly: true,
       secure: secureCookies,
-      sameSite: "strict",
+      sameSite: "lax",
       path: "/auth/confirm",
       maxAge: PENDING_RECOVERY_TTL_SECONDS,
       priority: "high",

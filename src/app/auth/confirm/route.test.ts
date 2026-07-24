@@ -41,8 +41,31 @@ test("GET stores the temporary HttpOnly cookie and redirects 303 to the clean UR
   const setCookie = response.headers.get("set-cookie") || "";
   assert.match(setCookie, new RegExp(`${PENDING_RECOVERY_COOKIE}=`));
   assert.match(setCookie.toLowerCase(), /httponly/);
-  assert.match(setCookie.toLowerCase(), /samesite=strict/);
+  assert.match(setCookie.toLowerCase(), /samesite=lax/);
   assert.equal(setCookie.includes("sensitive-token"), false);
+});
+
+test("external email navigation preserves the pending cookie for the clean GET", async () => {
+  const initial = await handleConfirmGet(
+    new NextRequest(
+      "https://app.test/auth/confirm?token_hash=email-token&type=recovery&next=/reset-password",
+      { headers: { referer: "https://outlook.office.com/" } }
+    )
+  );
+  const setCookie = initial.headers.get("set-cookie") || "";
+  const cookieValue = setCookie.match(new RegExp(`${PENDING_RECOVERY_COOKIE}=([^;]+)`))?.[1];
+
+  assert.equal(initial.status, 303);
+  assert.match(setCookie.toLowerCase(), /samesite=lax/);
+  assert.ok(cookieValue);
+
+  const clean = await handleConfirmGet(
+    new NextRequest("https://app.test/auth/confirm", {
+      headers: { cookie: `${PENDING_RECOVERY_COOKIE}=${cookieValue}` },
+    })
+  );
+  assert.equal(clean.status, 200);
+  assert.match(await clean.text(), /Continuar con la recuperaci/);
 });
 
 test("GET and scanner-only GET never execute verifyOtp", async () => {
