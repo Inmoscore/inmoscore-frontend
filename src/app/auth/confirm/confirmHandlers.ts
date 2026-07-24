@@ -41,6 +41,10 @@ export const RECOVERY_FAILURE_REASONS = [
   "grant_failed",
   "unexpected_error",
   "origin_mismatch",
+  "forwarded_host_mismatch",
+  "insecure_forwarded_proto",
+  "cross_site_request",
+  "malformed_origin",
   "secret_configuration_failed",
   "supabase_configuration_failed",
   "supabase_client_init_failed",
@@ -87,49 +91,111 @@ function logRecoveryStage(
   }
 }
 
-function safeOriginHost(origin: string): string | null {
-  try {
-    return new URL(origin).hostname.toLowerCase() || null;
-  } catch {
-    return null;
-  }
-}
+export type RecoveryRequestOriginValidation =
+  | { status: "valid" }
+  | { status: "origin_mismatch" }
+  | { status: "forwarded_host_mismatch" }
+  | { status: "insecure_forwarded_proto" }
+  | { status: "cross_site_request" }
+  | { status: "malformed_origin" };
 
-function safeForwardedHost(header: string | null): string | null {
-  const candidate = header?.split(",", 1)[0]?.trim() || "";
+const RECOVERY_ORIGIN_LOG_STAGE = {
+  origin_mismatch: "RECOVERY_CONFIRM_ORIGIN_MISMATCH",
+  forwarded_host_mismatch: "RECOVERY_CONFIRM_FORWARDED_HOST_MISMATCH",
+  insecure_forwarded_proto: "RECOVERY_CONFIRM_INSECURE_FORWARDED_PROTO",
+  cross_site_request: "RECOVERY_CONFIRM_CROSS_SITE_REQUEST",
+  malformed_origin: "RECOVERY_CONFIRM_MALFORMED_ORIGIN",
+} as const;
+
+function parseForwardedHostname(header: string | null): string | null {
+  const candidate = header?.trim() || "";
   if (
     !candidate ||
     candidate.length > 255 ||
-    /[\s/?#@\\]/.test(candidate)
+    /[\s,/:?#@\\]/.test(candidate)
   ) {
     return null;
   }
+
   try {
-    return new URL(`http://${candidate}`).hostname.toLowerCase() || null;
+    const parsed = new URL(`https://${candidate}`);
+    return parsed.hostname.toLowerCase() || null;
   } catch {
     return null;
   }
 }
 
-function safeForwardedProto(header: string | null): "http" | "https" | null {
-  const candidate = header?.split(",", 1)[0]?.trim().toLowerCase();
-  return candidate === "http" || candidate === "https" ? candidate : null;
-}
+export function validateRecoveryRequestOrigin(
+  request: NextRequest
+): RecoveryRequestOriginValidation {
+  const requestHostname = request.nextUrl.hostname.toLowerCase();
+  const forwardedHostHeader = request.headers.get("x-forwarded-host");
+  const forwardedProtoHeader = request.headers.get("x-forwarded-proto");
+  const forwardedHostname = parseForwardedHostname(forwardedHostHeader);
+  const forwardedProto = forwardedProtoHeader?.trim().toLowerCase() || null;
 
-function logRecoveryOriginMismatch(
-  request: NextRequest,
-  requestId: string,
-  origin: string
-): void {
-  console.warn("[RECOVERY_CONFIRM_ORIGIN_MISMATCH]", {
-    request_id: requestId,
-    stage: "RECOVERY_CONFIRM_ORIGIN_MISMATCH",
-    timestamp: new Date().toISOString(),
-    origin_host: safeOriginHost(origin),
-    request_host: request.nextUrl.hostname.toLowerCase(),
-    forwarded_host: safeForwardedHost(request.headers.get("x-forwarded-host")),
-    forwarded_proto: safeForwardedProto(request.headers.get("x-forwarded-proto")),
-  });
+  if (forwardedProtoHeader !== null && forwardedProto !== "https") {
+    return { status: "insecure_forwarded_proto" };
+  }
+  if (
+    forwardedHostHeader !== null &&
+    forwardedHostname !== requestHostname
+  ) {
+    return { status: "forwarded_host_mismatch" };
+  }
+
+  const fetchSite = request.headers.get("sec-fetch-site");
+  if (
+    fetchSite !== null &&
+    fetchSite !== "same-origin" &&
+    fetchSite !== "same-site"
+  ) {
+    return { status: "cross_site_request" };
+  }
+  const fetchMode = request.headers.get("sec-fetch-mode");
+  if (fetchMode !== null && fetchMode !== "navigate") {
+    return { status: "cross_site_request" };
+  }
+
+  const origin = request.headers.get("origin");
+  if (origin === null || origin === "null") {
+    if (forwardedProto !== "https") {
+      return { status: "insecure_forwarded_proto" };
+    }
+    if (forwardedHostname !== requestHostname) {
+      return { status: "forwarded_host_mismatch" };
+    }
+    return { status: "valid" };
+  }
+
+  let parsedOrigin: URL;
+  try {
+    parsedOrigin = new URL(origin);
+  } catch {
+    return { status: "malformed_origin" };
+  }
+  if (
+    parsedOrigin.username ||
+    parsedOrigin.password ||
+    parsedOrigin.pathname !== "/" ||
+    parsedOrigin.search ||
+    parsedOrigin.hash
+  ) {
+    return { status: "malformed_origin" };
+  }
+
+  const effectiveProtocol =
+    forwardedProto === "https" ? "https:" : request.nextUrl.protocol;
+  const effectiveHostname = forwardedHostname ?? requestHostname;
+  if (
+    parsedOrigin.protocol !== "https:" ||
+    parsedOrigin.protocol !== effectiveProtocol ||
+    parsedOrigin.hostname.toLowerCase() !== effectiveHostname
+  ) {
+    return { status: "origin_mismatch" };
+  }
+
+  return { status: "valid" };
 }
 
 function withSecurityHeaders(response: NextResponse): NextResponse {
@@ -247,10 +313,13 @@ export async function handleConfirmPost(
 ): Promise<NextResponse> {
   const requestId = randomUUID();
 
-  const origin = request.headers.get("origin");
-  if (origin && origin !== request.nextUrl.origin) {
-    logRecoveryOriginMismatch(request, requestId, origin);
-    return createRecoveryFailureResponse(request, "origin_mismatch");
+  const originValidation = validateRecoveryRequestOrigin(request);
+  if (originValidation.status !== "valid") {
+    logRecoveryStage(
+      RECOVERY_ORIGIN_LOG_STAGE[originValidation.status],
+      requestId
+    );
+    return createRecoveryFailureResponse(request, originValidation.status);
   }
 
   const pendingCookie = request.cookies.get(PENDING_RECOVERY_COOKIE)?.value;

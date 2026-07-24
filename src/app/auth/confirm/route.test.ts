@@ -47,7 +47,10 @@ async function successfulConfirmPost(headers: Record<string, string>): Promise<R
   return handleConfirmPost(
     new NextRequest("https://app.test/auth/confirm", {
       method: "POST",
-      headers,
+      headers: {
+        origin: "https://app.test",
+        ...headers,
+      },
     }),
     async () => ({
       data: {
@@ -160,7 +163,132 @@ test("POST with matching Origin continues the recovery flow", async () => {
   assert.equal(response.headers.get("location"), "https://app.test/reset-password");
 });
 
-test("POST with mismatched Origin exposes only origin_mismatch and logs sanitized hosts", async () => {
+test("POST with literal null Origin and valid proxy signals continues the recovery flow", async () => {
+  const response = await successfulConfirmPost({
+    cookie: `${PENDING_RECOVERY_COOKIE}=${pendingCookie()}`,
+    origin: "null",
+    "x-forwarded-host": "app.test",
+    "x-forwarded-proto": "https",
+    "sec-fetch-site": "same-site",
+    "sec-fetch-mode": "navigate",
+  });
+  assert.equal(response.headers.get("location"), "https://app.test/reset-password");
+});
+
+test("POST without Origin and with valid proxy signals continues the recovery flow", async () => {
+  const response = await handleConfirmPost(
+    new NextRequest("https://app.test/auth/confirm", {
+      method: "POST",
+      headers: {
+        cookie: `${PENDING_RECOVERY_COOKIE}=${pendingCookie()}`,
+        "x-forwarded-host": "app.test",
+        "x-forwarded-proto": "https",
+        "sec-fetch-site": "same-origin",
+        "sec-fetch-mode": "navigate",
+      },
+    }),
+    async () => ({
+      data: {
+        user: { id: "user-1" } as never,
+        session: { access_token: token("session-1") } as never,
+      },
+      error: null,
+    })
+  );
+  assert.equal(response.headers.get("location"), "https://app.test/reset-password");
+});
+
+test("POST with another Origin host exposes only origin_mismatch", async () => {
+  const response = await handleConfirmPost(
+    new NextRequest("https://app.test/auth/confirm", {
+      method: "POST",
+      headers: { origin: "https://external.test" },
+    })
+  );
+  assertSafeFailureReason(response, "origin_mismatch");
+});
+
+test("POST with HTTP Origin exposes only origin_mismatch", async () => {
+  const response = await handleConfirmPost(
+    new NextRequest("https://app.test/auth/confirm", {
+      method: "POST",
+      headers: { origin: "http://app.test" },
+    })
+  );
+  assertSafeFailureReason(response, "origin_mismatch");
+});
+
+test("POST with a different forwarded host exposes only forwarded_host_mismatch", async () => {
+  const response = await handleConfirmPost(
+    new NextRequest("https://app.test/auth/confirm", {
+      method: "POST",
+      headers: {
+        origin: "https://app.test",
+        "x-forwarded-host": "external.test",
+        "x-forwarded-proto": "https",
+      },
+    })
+  );
+  assertSafeFailureReason(response, "forwarded_host_mismatch");
+});
+
+test("POST with HTTP forwarded proto exposes only insecure_forwarded_proto", async () => {
+  const response = await handleConfirmPost(
+    new NextRequest("https://app.test/auth/confirm", {
+      method: "POST",
+      headers: {
+        origin: "null",
+        "x-forwarded-host": "app.test",
+        "x-forwarded-proto": "http",
+      },
+    })
+  );
+  assertSafeFailureReason(response, "insecure_forwarded_proto");
+});
+
+test("POST with cross-site Fetch Metadata exposes only cross_site_request", async () => {
+  const response = await handleConfirmPost(
+    new NextRequest("https://app.test/auth/confirm", {
+      method: "POST",
+      headers: {
+        origin: "null",
+        "x-forwarded-host": "app.test",
+        "x-forwarded-proto": "https",
+        "sec-fetch-site": "cross-site",
+        "sec-fetch-mode": "navigate",
+      },
+    })
+  );
+  assertSafeFailureReason(response, "cross_site_request");
+});
+
+test("POST with non-navigation Fetch Metadata exposes only cross_site_request", async () => {
+  const response = await handleConfirmPost(
+    new NextRequest("https://app.test/auth/confirm", {
+      method: "POST",
+      headers: {
+        origin: "null",
+        "x-forwarded-host": "app.test",
+        "x-forwarded-proto": "https",
+        "sec-fetch-site": "same-origin",
+        "sec-fetch-mode": "cors",
+      },
+    })
+  );
+  assertSafeFailureReason(response, "cross_site_request");
+});
+
+test("POST with malformed non-null Origin exposes only malformed_origin", async () => {
+  const response = await handleConfirmPost(
+    new NextRequest("https://app.test/auth/confirm", {
+      method: "POST",
+      headers: { origin: "not a valid origin" },
+    })
+  );
+  assertSafeFailureReason(response, "malformed_origin");
+});
+
+test("origin rejection logs only the safe classification", async () => {
   const warnings: unknown[][] = [];
   const originalWarn = console.warn;
   console.warn = (...args: unknown[]) => {
@@ -174,12 +302,10 @@ test("POST with mismatched Origin exposes only origin_mismatch and logs sanitize
         {
           method: "POST",
           headers: {
-            cookie: "diagnostic_cookie=private-cookie-value",
-            origin:
-              "https://external.test/private-path?token_hash=private-token-value",
-            "x-forwarded-host":
-              "Public.Example.test:8443, internal.private.example",
-            "x-forwarded-proto": "HTTPS, ftp",
+            cookie: "diagnostic_cookie=private-cookie-value; token_hash=private-token-value",
+            origin: "https://external.test",
+            "x-forwarded-host": "app.test",
+            "x-forwarded-proto": "https",
           },
         }
       )
@@ -197,16 +323,8 @@ test("POST with mismatched Origin exposes only origin_mismatch and logs sanitize
     "request_id",
     "stage",
     "timestamp",
-    "origin_host",
-    "request_host",
-    "forwarded_host",
-    "forwarded_proto",
   ]);
   assert.equal(metadata.stage, "RECOVERY_CONFIRM_ORIGIN_MISMATCH");
-  assert.equal(metadata.origin_host, "external.test");
-  assert.equal(metadata.request_host, "app.test");
-  assert.equal(metadata.forwarded_host, "public.example.test");
-  assert.equal(metadata.forwarded_proto, "https");
 
   const serializedWarnings = JSON.stringify(warnings);
   for (const forbidden of [
@@ -214,24 +332,22 @@ test("POST with mismatched Origin exposes only origin_mismatch and logs sanitize
     "private-token-value",
     "private-cookie-value",
     "private-query-value",
-    "private-path",
-    "internal.private.example",
-    "8443",
+    "external.test",
+    "app.test",
+    "x-forwarded-host",
+    "origin",
+    "cookie",
   ]) {
     assert.equal(serializedWarnings.includes(forbidden), false);
   }
 });
 
-test("POST without Origin continues the recovery flow", async () => {
-  const response = await successfulConfirmPost({
-    cookie: `${PENDING_RECOVERY_COOKIE}=${pendingCookie()}`,
-  });
-  assert.equal(response.headers.get("location"), "https://app.test/reset-password");
-});
-
 test("POST without pending cookie is rejected and expires the pending cookie", async () => {
   const response = await handleConfirmPost(
-    new NextRequest("https://app.test/auth/confirm", { method: "POST" }),
+    new NextRequest("https://app.test/auth/confirm", {
+      method: "POST",
+      headers: { origin: "https://app.test" },
+    }),
     async () => {
       throw new Error("must not execute");
     }
@@ -245,7 +361,10 @@ test("invalid pending cookie exposes only cookie_decrypt_failed", async () => {
   const response = await handleConfirmPost(
     new NextRequest("https://app.test/auth/confirm", {
       method: "POST",
-      headers: { cookie: `${PENDING_RECOVERY_COOKIE}=not-a-valid-cookie` },
+      headers: {
+        cookie: `${PENDING_RECOVERY_COOKIE}=not-a-valid-cookie`,
+        origin: "https://app.test",
+      },
     }),
     async () => {
       throw new Error("must not execute");
@@ -263,7 +382,10 @@ test("invalid recovery secret exposes only secret_configuration_failed", async (
     const response = await handleConfirmPost(
       new NextRequest("https://app.test/auth/confirm", {
         method: "POST",
-        headers: { cookie: `${PENDING_RECOVERY_COOKIE}=${sealedPendingCookie}` },
+        headers: {
+          cookie: `${PENDING_RECOVERY_COOKIE}=${sealedPendingCookie}`,
+          origin: "https://app.test",
+        },
       }),
       async () => {
         throw new Error("must not execute");
@@ -285,7 +407,10 @@ test("invalid Supabase configuration exposes only supabase_configuration_failed"
     const response = await handleConfirmPost(
       new NextRequest("https://app.test/auth/confirm", {
         method: "POST",
-        headers: { cookie: `${PENDING_RECOVERY_COOKIE}=${pendingCookie()}` },
+        headers: {
+          cookie: `${PENDING_RECOVERY_COOKIE}=${pendingCookie()}`,
+          origin: "https://app.test",
+        },
       })
     );
     assertSafeFailureReason(response, "supabase_configuration_failed");
@@ -305,7 +430,10 @@ test("Supabase client initialization failure exposes only supabase_client_init_f
     const response = await handleConfirmPost(
       new NextRequest("https://app.test/auth/confirm", {
         method: "POST",
-        headers: { cookie: `${PENDING_RECOVERY_COOKIE}=${pendingCookie()}` },
+        headers: {
+          cookie: `${PENDING_RECOVERY_COOKIE}=${pendingCookie()}`,
+          origin: "https://app.test",
+        },
       })
     );
     assertSafeFailureReason(response, "supabase_client_init_failed");
@@ -324,7 +452,10 @@ test("expired pending cookie is rejected without executing verifyOtp", async () 
   const response = await handleConfirmPost(
     new NextRequest("https://app.test/auth/confirm", {
       method: "POST",
-      headers: { cookie: `${PENDING_RECOVERY_COOKIE}=${expired}` },
+      headers: {
+        cookie: `${PENDING_RECOVERY_COOKIE}=${expired}`,
+        origin: "https://app.test",
+      },
     }),
     async () => {
       verificationCalls += 1;
@@ -340,7 +471,10 @@ test("valid POST executes verifyOtp once, deletes pending cookie and creates gra
   const response = await handleConfirmPost(
     new NextRequest("https://app.test/auth/confirm", {
       method: "POST",
-      headers: { cookie: `${PENDING_RECOVERY_COOKIE}=${pendingCookie()}` },
+      headers: {
+        cookie: `${PENDING_RECOVERY_COOKIE}=${pendingCookie()}`,
+        origin: "https://app.test",
+      },
     }),
     async (params) => {
       verificationCalls += 1;
@@ -367,7 +501,10 @@ test("reused token is rejected when Supabase reports it consumed", async () => {
   const response = await handleConfirmPost(
     new NextRequest("https://app.test/auth/confirm", {
       method: "POST",
-      headers: { cookie: `${PENDING_RECOVERY_COOKIE}=${pendingCookie("reused-token")}` },
+      headers: {
+        cookie: `${PENDING_RECOVERY_COOKIE}=${pendingCookie("reused-token")}`,
+        origin: "https://app.test",
+      },
     }),
     async () => {
       verificationCalls += 1;
@@ -385,7 +522,10 @@ test("thrown OTP verification exposes only otp_rejected", async () => {
   const response = await handleConfirmPost(
     new NextRequest("https://app.test/auth/confirm", {
       method: "POST",
-      headers: { cookie: `${PENDING_RECOVERY_COOKIE}=${pendingCookie()}` },
+      headers: {
+        cookie: `${PENDING_RECOVERY_COOKIE}=${pendingCookie()}`,
+        origin: "https://app.test",
+      },
     }),
     async () => {
       throw new Error(
@@ -401,7 +541,10 @@ test("null or undefined verifyOtp data exposes only verifyotp_null_data", async 
     const response = await handleConfirmPost(
       new NextRequest("https://app.test/auth/confirm", {
         method: "POST",
-        headers: { cookie: `${PENDING_RECOVERY_COOKIE}=${pendingCookie()}` },
+        headers: {
+          cookie: `${PENDING_RECOVERY_COOKIE}=${pendingCookie()}`,
+          origin: "https://app.test",
+        },
       }),
       async () => ({
         data,
@@ -416,7 +559,10 @@ test("missing user id exposes only verifyotp_user_missing", async () => {
   const response = await handleConfirmPost(
     new NextRequest("https://app.test/auth/confirm", {
       method: "POST",
-      headers: { cookie: `${PENDING_RECOVERY_COOKIE}=${pendingCookie()}` },
+      headers: {
+        cookie: `${PENDING_RECOVERY_COOKIE}=${pendingCookie()}`,
+        origin: "https://app.test",
+      },
     }),
     async () => ({
       data: {
@@ -433,7 +579,10 @@ test("missing session access token exposes only verifyotp_session_missing", asyn
   const response = await handleConfirmPost(
     new NextRequest("https://app.test/auth/confirm", {
       method: "POST",
-      headers: { cookie: `${PENDING_RECOVERY_COOKIE}=${pendingCookie()}` },
+      headers: {
+        cookie: `${PENDING_RECOVERY_COOKIE}=${pendingCookie()}`,
+        origin: "https://app.test",
+      },
     }),
     async () => ({
       data: {
@@ -455,7 +604,10 @@ test("missing session id exposes only verifyotp_session_id_missing", async () =>
   const response = await handleConfirmPost(
     new NextRequest("https://app.test/auth/confirm", {
       method: "POST",
-      headers: { cookie: `${PENDING_RECOVERY_COOKIE}=${pendingCookie()}` },
+      headers: {
+        cookie: `${PENDING_RECOVERY_COOKIE}=${pendingCookie()}`,
+        origin: "https://app.test",
+      },
     }),
     async () => ({
       data: {
@@ -482,7 +634,10 @@ test("grant creation failure exposes only grant_failed", async () => {
     const response = await handleConfirmPost(
       new NextRequest("https://app.test/auth/confirm", {
         method: "POST",
-        headers: { cookie: `${PENDING_RECOVERY_COOKIE}=${sealedPendingCookie}` },
+        headers: {
+          cookie: `${PENDING_RECOVERY_COOKIE}=${sealedPendingCookie}`,
+          origin: "https://app.test",
+        },
       }),
       async () => ({
         data: {
@@ -512,7 +667,10 @@ test("unexpected failure after client initialization exposes only unexpected_aft
   const response = await handleConfirmPost(
     new NextRequest("https://app.test/auth/confirm", {
       method: "POST",
-      headers: { cookie: `${PENDING_RECOVERY_COOKIE}=${pendingCookie()}` },
+      headers: {
+        cookie: `${PENDING_RECOVERY_COOKIE}=${pendingCookie()}`,
+        origin: "https://app.test",
+      },
     }),
     async () => ({
       data: data as never,
