@@ -1,24 +1,16 @@
 "use client";
 
 import Link from "next/link";
-import { useActionState, useEffect } from "react";
-import { useRouter } from "next/navigation";
-import { CheckCircle2, Loader2 } from "lucide-react";
+import { useActionState } from "react";
+import { Loader2 } from "lucide-react";
 import { completePasswordReset } from "./actions";
 import { initialResetPasswordState } from "./resetPasswordState";
 
 export default function ResetPasswordForm() {
-  const router = useRouter();
   const [state, formAction, pending] = useActionState(
     completePasswordReset,
     initialResetPasswordState
   );
-
-  useEffect(() => {
-    if (state.status !== "success") return;
-    const timer = window.setTimeout(() => router.replace("/login"), 1800);
-    return () => window.clearTimeout(timer);
-  }, [router, state.status]);
 
   return (
     <form action={formAction} className="space-y-4">
@@ -34,7 +26,7 @@ export default function ResetPasswordForm() {
           minLength={8}
           maxLength={128}
           required
-          disabled={pending || state.status === "success"}
+          disabled={pending}
         />
       </div>
 
@@ -50,7 +42,7 @@ export default function ResetPasswordForm() {
           minLength={8}
           maxLength={128}
           required
-          disabled={pending || state.status === "success"}
+          disabled={pending}
         />
       </div>
 
@@ -60,16 +52,9 @@ export default function ResetPasswordForm() {
         </div>
       )}
 
-      {state.status === "success" && (
-        <div className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-700">
-          <CheckCircle2 className="h-5 w-5" />
-          {state.message}
-        </div>
-      )}
-
       <button
         type="submit"
-        disabled={pending || state.status === "success"}
+        disabled={pending}
         className="flex w-full items-center justify-center gap-2 rounded-xl bg-blue-700 px-4 py-3 font-bold text-white transition hover:bg-blue-800 disabled:cursor-not-allowed disabled:bg-slate-400"
       >
         {pending && <Loader2 className="h-5 w-5 animate-spin" />}

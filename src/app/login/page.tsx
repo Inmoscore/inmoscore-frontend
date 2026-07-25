@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Suspense, useCallback, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { LockKeyhole, MailCheck, ShieldCheck } from "lucide-react";
 import { setSession } from "@/lib/auth";
@@ -30,6 +30,9 @@ type FormState = {
   password: string;
 };
 
+const passwordResetSuccessMessage =
+  "Contraseña actualizada correctamente. Ya puedes iniciar sesión.";
+
 function getSafeRedirect(value: string | null): string {
   if (!value) return "/";
   if (!value.startsWith("/")) return "/";
@@ -47,6 +50,8 @@ function createApiError(message: string, code?: string): ApiError {
 function LoginPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const passwordResetSucceeded =
+    searchParams.get("password_reset") === "success";
 
   const [formData, setFormData] = useState<FormState>({
     email: "",
@@ -62,7 +67,9 @@ function LoginPageContent() {
   const [loginTurnstileResetKey, setLoginTurnstileResetKey] = useState(0);
   const [resetTurnstileResetKey, setResetTurnstileResetKey] = useState(0);
   const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
+  const [notice, setNotice] = useState(
+    passwordResetSucceeded ? passwordResetSuccessMessage : ""
+  );
 
   const API_URL = process.env.NEXT_PUBLIC_API_URL;
   const TURNSTILE_SITE_KEY = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY;
@@ -71,6 +78,19 @@ function LoginPageContent() {
   const redirectTo = useMemo(() => {
     return getSafeRedirect(searchParams.get("redirect"));
   }, [searchParams]);
+
+  useEffect(() => {
+    if (!passwordResetSucceeded) return;
+
+    const cleanedSearchParams = new URLSearchParams(searchParams.toString());
+    cleanedSearchParams.delete("password_reset");
+    const cleanedQuery = cleanedSearchParams.toString();
+    window.history.replaceState(
+      window.history.state,
+      "",
+      cleanedQuery ? `/login?${cleanedQuery}` : "/login"
+    );
+  }, [passwordResetSucceeded, searchParams]);
 
   const handleChange =
     (field: keyof FormState) => (e: React.ChangeEvent<HTMLInputElement>) => {

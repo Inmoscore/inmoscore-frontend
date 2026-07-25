@@ -1,6 +1,7 @@
 "use server";
 
 import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
 import {
   RECOVERY_GRANT_COOKIE,
   advanceRecoveryGrantToSyncPending,
@@ -207,12 +208,10 @@ export async function completePasswordReset(
     deleteGrant();
     await supabase.auth.signOut().catch(() => null);
     logResetPasswordStage("RESET_PASSWORD_SUCCESS");
-    return {
-      status: "success",
-      message: "Contraseña actualizada correctamente. Te llevaremos al login.",
-    };
   } catch {
     logResetPasswordStage("RESET_PASSWORD_UNEXPECTED", "error");
     return genericError();
   }
+
+  redirect("/login?password_reset=success");
 }
