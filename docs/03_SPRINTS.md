@@ -8,7 +8,8 @@
 | 2 | Legal Reporting Audit | Completado | Se fortalecieron reportes con evidencia, revision, notificacion y trazabilidad legal. |
 | 3A | Authentication Audit | Completado | Se auditaron flujos de registro, login, verificacion, reset y eventos de autenticacion. |
 | 3B | Authentication Hardening | Casi cerrado | Turnstile y endurecimiento de auth implementados; pendiente validacion final de reset password en produccion. |
-| 4 | Deploy Production | Siguiente | Preparar y ejecutar despliegue productivo controlado. |
+| 4 | Deploy Production | En progreso | Preparar la base productiva; backend hosting y validaciones de despliegue permanecen pendientes. |
+| 5 | Production Readiness | REVIEW | Plan de cinco frentes para alcanzar una decision formal Go/No-Go antes de aceptar clientes publicos. |
 
 ## Sprint 1: Search Audit
 
@@ -61,7 +62,7 @@ Pendiente:
 
 ## Sprint 4: Deploy Production
 
-Estado: siguiente.
+Estado: en progreso.
 
 Objetivo:
 
@@ -77,3 +78,31 @@ Checklist inicial:
 - Dominio/remitente Resend.
 - Healthcheck backend.
 - Pruebas funcionales de auth, busqueda, reportes y admin.
+
+## Sprint 5: Production Readiness
+
+Estado: REVIEW.
+
+Responsable: CTO.
+
+Objetivo:
+
+- Convertir la base funcional en una operacion apta para clientes publicos.
+- Cerrar infraestructura, monetizacion, seguridad y operacion.
+- Ejecutar las puertas de Go Live y emitir una decision formal Go/No-Go.
+
+Frentes:
+
+1. Infraestructura.
+2. Monetizacion.
+3. Seguridad.
+4. Operacion.
+5. Go Live.
+
+Condicion de entrada:
+
+- Sprint 4 cierra sus criterios o documenta formalmente los bloqueantes transferidos.
+
+Artefacto:
+
+- `ies/SPRINTS/SPR-005_PRODUCTION_READINESS.md`.

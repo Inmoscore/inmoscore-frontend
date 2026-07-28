@@ -2,6 +2,15 @@
 
 ## 2026-07-28
 
+### Creacion de SPR-005 Production Readiness
+
+- Se crea `ies/SPRINTS/SPR-005_PRODUCTION_READINESS.md` en estado REVIEW.
+- El responsable del sprint es CTO.
+- El sprint se divide en cinco frentes: infraestructura, monetizacion, seguridad, operacion y Go Live.
+- Se incorpora un checklist de salida para registro, login, recovery, busqueda, reportes, pagos, planes, admin, correo, infraestructura, QA y rollback.
+- SPR-005 depende del cierre o transferencia formal de bloqueantes de SPR-004.
+- No se cambian estados de Features ni se mueve el Product Backlog.
+
 ### Cierre documental de password recovery
 
 - FEAT-003 y STORY-001 pasan a DONE con la evidencia funcional productiva existente.

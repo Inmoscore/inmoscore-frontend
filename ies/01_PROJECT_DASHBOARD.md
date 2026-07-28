@@ -37,7 +37,7 @@ Estados, prioridades, tipos e IDs oficiales se definen en `ies/STANDARDS.md`.
 | Version del producto | TBD |
 | Version del IES | v1.0 |
 | Sprint actual | SPR-004 |
-| Proximo sprint | TBD |
+| Proximo sprint | SPR-005 - Production Readiness |
 | Proxima release | REL-001 |
 | Responsable operativo | InmoScore Engineering Team |
 | Ultima revision | 2026-07-24 |
@@ -102,6 +102,18 @@ Estados, prioridades, tipos e IDs oficiales se definen en `ies/STANDARDS.md`.
 | Bloqueante principal | Backend Railway con trial expirado. |
 | Definition of Done | Variables productivas revisadas, backend confirmado o reemplazo decidido, auth y flujos criticos validados, auditorias revisadas y logs temporales limpios. |
 
+### Sprint planificado
+
+| Campo | Valor |
+| --- | --- |
+| ID | SPR-005 |
+| Nombre | Production Readiness |
+| Estado | REVIEW |
+| Responsable | CTO |
+| Objetivo | Cerrar infraestructura, monetizacion, seguridad, operacion y puertas de Go Live antes de aceptar clientes publicos. |
+| Condicion de entrada | SPR-004 cierra sus criterios o documenta formalmente los bloqueantes transferidos. |
+| Artefacto | `ies/SPRINTS/SPR-005_PRODUCTION_READINESS.md` |
+
 ## 9. Riesgos
 
 | ID | Titulo | Prioridad | Estado | Mitigacion | Responsable |
@@ -140,3 +152,4 @@ Estados, prioridades, tipos e IDs oficiales se definen en `ies/STANDARDS.md`.
 | 2026-07-22 | Correccion local de reset password implementada; 19 pruebas, builds frontend/backend y lint dirigido exitosos. Validacion productiva permanece bloqueada. | InmoScore Engineering Team |
 | 2026-07-24 | Reset password validado en produccion: credencial nueva aceptada, anterior rechazada, enlace de un solo uso y redirect al login confirmados; RISK-001 y TASK-001 cerrados. | InmoScore Engineering Team |
 | 2026-07-28 | FEAT-003 y STORY-001 cerrados con evidencia persistida `password.reset.success`; EPIC-010 registra el refactor independiente de auditoria. El sprint permanece IN_PROGRESS. | InmoScore Engineering Team |
+| 2026-07-28 | SPR-005 Production Readiness creado en REVIEW con cinco frentes: infraestructura, monetizacion, seguridad, operacion y Go Live. SPR-004 permanece IN_PROGRESS. | InmoScore Engineering Team |
