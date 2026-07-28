@@ -29,7 +29,9 @@ Reglas:
 - Turnstile requerido en registro, login y reset password.
 - `/auth/confirm` solo acepta `token_hash`, `type` y `next`; recovery exige `type=recovery`.
 - El GET no consume OTP: usa cookie HttpOnly temporal y redireccion 303 sin query string.
+- El POST valida Origin y cabeceras reenviadas compatibles con el proxy de Vercel antes de consumir el OTP.
 - La sesion de reset requiere una autorizacion firmada efimera, no solo una sesion normal.
+- Los rechazos de recovery redirigen de forma generica a `/reset-password?error=invalid_link`; no exponen etapas internas mediante query parameters.
 - No filtrar existencia de usuarios de forma insegura.
 - Registrar auditoria de eventos relevantes.
 

@@ -17,18 +17,18 @@ const loginSource = readFileSync(
 
 test("successful password reset redirects after cleanup while failures remain in the form", () => {
   const finalDeleteGrant = actionsSource.lastIndexOf("deleteGrant();");
-  const successLog = actionsSource.lastIndexOf(
-    'logResetPasswordStage("RESET_PASSWORD_SUCCESS")'
+  const signOut = actionsSource.lastIndexOf(
+    "await supabase.auth.signOut().catch(() => null);"
   );
   const successRedirect = actionsSource.lastIndexOf(
     'redirect("/login?password_reset=success")'
   );
 
   assert.ok(finalDeleteGrant >= 0);
-  assert.ok(successLog > finalDeleteGrant);
-  assert.ok(successRedirect > successLog);
+  assert.ok(signOut > finalDeleteGrant);
+  assert.ok(successRedirect > signOut);
   assert.doesNotMatch(
-    actionsSource.slice(successLog, successRedirect),
+    actionsSource.slice(signOut, successRedirect),
     /return\s+\{/
   );
 

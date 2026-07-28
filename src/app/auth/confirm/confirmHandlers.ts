@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import type { Session, User } from "@supabase/supabase-js";
 import { NextRequest, NextResponse } from "next/server.js";
 import {
@@ -28,68 +27,7 @@ type VerifyRecoveryOtp = (params: {
   type: "recovery";
 }) => Promise<VerifyOtpResult>;
 
-export const RECOVERY_FAILURE_REASONS = [
-  "cookie_missing",
-  "cookie_decrypt_failed",
-  "cookie_expired",
-  "otp_rejected",
-  "verifyotp_null_data",
-  "verifyotp_user_missing",
-  "verifyotp_session_missing",
-  "verifyotp_session_id_missing",
-  "session_cookie_failed",
-  "grant_failed",
-  "unexpected_error",
-  "origin_mismatch",
-  "forwarded_host_mismatch",
-  "insecure_forwarded_proto",
-  "cross_site_request",
-  "malformed_origin",
-  "secret_configuration_failed",
-  "supabase_configuration_failed",
-  "supabase_client_init_failed",
-  "unexpected_after_client_init",
-] as const;
-
-export type RecoveryFailureReason = (typeof RECOVERY_FAILURE_REASONS)[number];
-
 const secureCookies = process.env.NODE_ENV === "production";
-
-type SafeSupabaseError = {
-  code?: string;
-  status?: number;
-};
-
-function safeSupabaseError(error: unknown): SafeSupabaseError {
-  if (!error || typeof error !== "object") return {};
-  const candidate = error as { code?: unknown; status?: unknown };
-  const result: SafeSupabaseError = {};
-  if (typeof candidate.code === "string" && /^[A-Za-z0-9_.-]{1,80}$/.test(candidate.code)) {
-    result.code = candidate.code;
-  }
-  if (typeof candidate.status === "number" && Number.isInteger(candidate.status)) {
-    result.status = candidate.status;
-  }
-  return result;
-}
-
-function logRecoveryStage(
-  stage: string,
-  requestId: string,
-  error?: unknown
-): void {
-  const metadata = {
-    request_id: requestId,
-    stage,
-    timestamp: new Date().toISOString(),
-    ...safeSupabaseError(error),
-  };
-  if (stage === "RECOVERY_CONFIRM_SUCCESS") {
-    console.info(`[${stage}]`, metadata);
-  } else {
-    console.warn(`[${stage}]`, metadata);
-  }
-}
 
 export type RecoveryRequestOriginValidation =
   | { status: "valid" }
@@ -98,14 +36,6 @@ export type RecoveryRequestOriginValidation =
   | { status: "insecure_forwarded_proto" }
   | { status: "cross_site_request" }
   | { status: "malformed_origin" };
-
-const RECOVERY_ORIGIN_LOG_STAGE = {
-  origin_mismatch: "RECOVERY_CONFIRM_ORIGIN_MISMATCH",
-  forwarded_host_mismatch: "RECOVERY_CONFIRM_FORWARDED_HOST_MISMATCH",
-  insecure_forwarded_proto: "RECOVERY_CONFIRM_INSECURE_FORWARDED_PROTO",
-  cross_site_request: "RECOVERY_CONFIRM_CROSS_SITE_REQUEST",
-  malformed_origin: "RECOVERY_CONFIRM_MALFORMED_ORIGIN",
-} as const;
 
 function parseForwardedHostname(header: string | null): string | null {
   const candidate = header?.trim() || "";
@@ -223,13 +153,9 @@ function deletePendingCookie(response: NextResponse) {
 }
 
 export function createRecoveryFailureResponse(
-  request: NextRequest,
-  reason: RecoveryFailureReason
+  request: NextRequest
 ): NextResponse {
-  const response = redirect(
-    request,
-    `/reset-password?error=invalid_link&reason=${reason}`
-  );
+  const response = redirect(request, "/reset-password?error=invalid_link");
   deletePendingCookie(response);
   return response;
 }
@@ -311,21 +237,14 @@ export async function handleConfirmPost(
   request: NextRequest,
   verifyOtpOverride?: VerifyRecoveryOtp
 ): Promise<NextResponse> {
-  const requestId = randomUUID();
-
   const originValidation = validateRecoveryRequestOrigin(request);
   if (originValidation.status !== "valid") {
-    logRecoveryStage(
-      RECOVERY_ORIGIN_LOG_STAGE[originValidation.status],
-      requestId
-    );
-    return createRecoveryFailureResponse(request, originValidation.status);
+    return createRecoveryFailureResponse(request);
   }
 
   const pendingCookie = request.cookies.get(PENDING_RECOVERY_COOKIE)?.value;
   if (!pendingCookie) {
-    logRecoveryStage("RECOVERY_CONFIRM_COOKIE_MISSING", requestId);
-    return createRecoveryFailureResponse(request, "cookie_missing");
+    return createRecoveryFailureResponse(request);
   }
 
   let pendingResult;
@@ -333,23 +252,19 @@ export async function handleConfirmPost(
   try {
     secret = requireRecoveryFlowSecret();
   } catch {
-    logRecoveryStage("RECOVERY_CONFIRM_COOKIE_DECRYPT_FAILED", requestId);
-    return createRecoveryFailureResponse(request, "secret_configuration_failed");
+    return createRecoveryFailureResponse(request);
   }
 
   try {
     pendingResult = inspectPendingRecovery(pendingCookie, secret);
   } catch {
-    logRecoveryStage("RECOVERY_CONFIRM_COOKIE_DECRYPT_FAILED", requestId);
-    return createRecoveryFailureResponse(request, "cookie_decrypt_failed");
+    return createRecoveryFailureResponse(request);
   }
   if (pendingResult.status === "decrypt_failed") {
-    logRecoveryStage("RECOVERY_CONFIRM_COOKIE_DECRYPT_FAILED", requestId);
-    return createRecoveryFailureResponse(request, "cookie_decrypt_failed");
+    return createRecoveryFailureResponse(request);
   }
   if (pendingResult.status === "expired") {
-    logRecoveryStage("RECOVERY_CONFIRM_COOKIE_EXPIRED", requestId);
-    return createRecoveryFailureResponse(request, "cookie_expired");
+    return createRecoveryFailureResponse(request);
   }
   const pending = pendingResult.value;
 
@@ -363,9 +278,8 @@ export async function handleConfirmPost(
       let configuration;
       try {
         configuration = getSupabaseConfiguration();
-      } catch (error) {
-        logRecoveryStage("RECOVERY_CONFIRM_OTP_REJECTED", requestId, error);
-        return createRecoveryFailureResponse(request, "supabase_configuration_failed");
+      } catch {
+        return createRecoveryFailureResponse(request);
       }
 
       let supabase;
@@ -382,9 +296,8 @@ export async function handleConfirmPost(
           },
           configuration
         );
-      } catch (error) {
-        logRecoveryStage("RECOVERY_CONFIRM_OTP_REJECTED", requestId, error);
-        return createRecoveryFailureResponse(request, "supabase_client_init_failed");
+      } catch {
+        return createRecoveryFailureResponse(request);
       }
 
       verifyOtp = (params) => supabase.auth.verifyOtp(params);
@@ -397,40 +310,33 @@ export async function handleConfirmPost(
         token_hash: pending.tokenHash,
         type: "recovery",
       }));
-    } catch (verificationError) {
-      logRecoveryStage("RECOVERY_CONFIRM_OTP_REJECTED", requestId, verificationError);
-      return createRecoveryFailureResponse(request, "otp_rejected");
+    } catch {
+      return createRecoveryFailureResponse(request);
     }
 
     if (error) {
-      logRecoveryStage("RECOVERY_CONFIRM_OTP_REJECTED", requestId, error);
-      return createRecoveryFailureResponse(request, "otp_rejected");
+      return createRecoveryFailureResponse(request);
     }
 
     if (!data) {
-      logRecoveryStage("RECOVERY_CONFIRM_SESSION_MISSING", requestId);
-      return createRecoveryFailureResponse(request, "verifyotp_null_data");
+      return createRecoveryFailureResponse(request);
     }
 
     if (!data.user?.id) {
-      logRecoveryStage("RECOVERY_CONFIRM_SESSION_MISSING", requestId);
-      return createRecoveryFailureResponse(request, "verifyotp_user_missing");
+      return createRecoveryFailureResponse(request);
     }
 
     if (!data.session?.access_token) {
-      logRecoveryStage("RECOVERY_CONFIRM_SESSION_MISSING", requestId);
-      return createRecoveryFailureResponse(request, "verifyotp_session_missing");
+      return createRecoveryFailureResponse(request);
     }
 
     const sessionId = extractSupabaseSessionId(data.session.access_token);
     if (!sessionId) {
-      logRecoveryStage("RECOVERY_CONFIRM_SESSION_MISSING", requestId);
-      return createRecoveryFailureResponse(request, "verifyotp_session_id_missing");
+      return createRecoveryFailureResponse(request);
     }
 
     if (!verifyOtpOverride && !sessionCookieSetAllInvoked) {
-      logRecoveryStage("RECOVERY_CONFIRM_SESSION_COOKIE_FAILED", requestId);
-      return createRecoveryFailureResponse(request, "session_cookie_failed");
+      return createRecoveryFailureResponse(request);
     }
 
     try {
@@ -446,14 +352,11 @@ export async function handleConfirmPost(
           priority: "high",
         }
       );
-    } catch (grantError) {
-      logRecoveryStage("RECOVERY_CONFIRM_GRANT_FAILED", requestId, grantError);
-      return createRecoveryFailureResponse(request, "grant_failed");
+    } catch {
+      return createRecoveryFailureResponse(request);
     }
-    logRecoveryStage("RECOVERY_CONFIRM_SUCCESS", requestId);
     return response;
-  } catch (error) {
-    logRecoveryStage("RECOVERY_CONFIRM_OTP_REJECTED", requestId, error);
-    return createRecoveryFailureResponse(request, "unexpected_after_client_init");
+  } catch {
+    return createRecoveryFailureResponse(request);
   }
 }

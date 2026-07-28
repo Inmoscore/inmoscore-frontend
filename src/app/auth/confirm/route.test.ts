@@ -6,11 +6,11 @@ import {
   sealPendingRecovery,
 } from "../../../lib/recoveryCookies.server.ts";
 import {
-  RECOVERY_FAILURE_REASONS,
   createRecoveryFailureResponse,
   handleConfirmGet,
   handleConfirmPost,
   renderConfirmHtml,
+  validateRecoveryRequestOrigin,
 } from "./confirmHandlers.ts";
 import { runtime } from "./route.ts";
 
@@ -62,19 +62,13 @@ async function successfulConfirmPost(headers: Record<string, string>): Promise<R
   );
 }
 
-function assertSafeFailureReason(
-  response: Response,
-  expectedReason: (typeof RECOVERY_FAILURE_REASONS)[number]
-): void {
+function assertSafeFailureResponse(response: Response): void {
   const location = response.headers.get("location") || "";
   const url = new URL(location);
   assert.equal(url.pathname, "/reset-password");
   assert.deepEqual(
     [...url.searchParams.entries()],
-    [
-      ["error", "invalid_link"],
-      ["reason", expectedReason],
-    ]
+    [["error", "invalid_link"]]
   );
   for (const forbidden of [
     "sensitive@example.test",
@@ -89,14 +83,11 @@ function assertSafeFailureReason(
   }
 }
 
-test("safe failure responses expose only the allowed reason codes", () => {
-  for (const reason of RECOVERY_FAILURE_REASONS) {
-    const response = createRecoveryFailureResponse(
-      new NextRequest("https://app.test/auth/confirm"),
-      reason
-    );
-    assertSafeFailureReason(response, reason);
-  }
+test("failure responses expose only the generic invalid-link error", () => {
+  const response = createRecoveryFailureResponse(
+    new NextRequest("https://app.test/auth/confirm")
+  );
+  assertSafeFailureResponse(response);
 });
 
 test("GET stores the temporary HttpOnly cookie and redirects 303 to the clean URL", async () => {
@@ -198,97 +189,111 @@ test("POST without Origin and with valid proxy signals continues the recovery fl
   assert.equal(response.headers.get("location"), "https://app.test/reset-password");
 });
 
-test("POST with another Origin host exposes only origin_mismatch", async () => {
-  const response = await handleConfirmPost(
-    new NextRequest("https://app.test/auth/confirm", {
-      method: "POST",
-      headers: { origin: "https://external.test" },
-    })
-  );
-  assertSafeFailureReason(response, "origin_mismatch");
+test("POST with another Origin host is rejected generically", async () => {
+  const request = new NextRequest("https://app.test/auth/confirm", {
+    method: "POST",
+    headers: { origin: "https://external.test" },
+  });
+  assert.deepEqual(validateRecoveryRequestOrigin(request), {
+    status: "origin_mismatch",
+  });
+  const response = await handleConfirmPost(request);
+  assertSafeFailureResponse(response);
 });
 
-test("POST with HTTP Origin exposes only origin_mismatch", async () => {
-  const response = await handleConfirmPost(
-    new NextRequest("https://app.test/auth/confirm", {
-      method: "POST",
-      headers: { origin: "http://app.test" },
-    })
-  );
-  assertSafeFailureReason(response, "origin_mismatch");
+test("POST with HTTP Origin is rejected generically", async () => {
+  const request = new NextRequest("https://app.test/auth/confirm", {
+    method: "POST",
+    headers: { origin: "http://app.test" },
+  });
+  assert.deepEqual(validateRecoveryRequestOrigin(request), {
+    status: "origin_mismatch",
+  });
+  const response = await handleConfirmPost(request);
+  assertSafeFailureResponse(response);
 });
 
-test("POST with a different forwarded host exposes only forwarded_host_mismatch", async () => {
-  const response = await handleConfirmPost(
-    new NextRequest("https://app.test/auth/confirm", {
-      method: "POST",
-      headers: {
-        origin: "https://app.test",
-        "x-forwarded-host": "external.test",
-        "x-forwarded-proto": "https",
-      },
-    })
-  );
-  assertSafeFailureReason(response, "forwarded_host_mismatch");
+test("POST with a different forwarded host is rejected generically", async () => {
+  const request = new NextRequest("https://app.test/auth/confirm", {
+    method: "POST",
+    headers: {
+      origin: "https://app.test",
+      "x-forwarded-host": "external.test",
+      "x-forwarded-proto": "https",
+    },
+  });
+  assert.deepEqual(validateRecoveryRequestOrigin(request), {
+    status: "forwarded_host_mismatch",
+  });
+  const response = await handleConfirmPost(request);
+  assertSafeFailureResponse(response);
 });
 
-test("POST with HTTP forwarded proto exposes only insecure_forwarded_proto", async () => {
-  const response = await handleConfirmPost(
-    new NextRequest("https://app.test/auth/confirm", {
-      method: "POST",
-      headers: {
-        origin: "null",
-        "x-forwarded-host": "app.test",
-        "x-forwarded-proto": "http",
-      },
-    })
-  );
-  assertSafeFailureReason(response, "insecure_forwarded_proto");
+test("POST with HTTP forwarded proto is rejected generically", async () => {
+  const request = new NextRequest("https://app.test/auth/confirm", {
+    method: "POST",
+    headers: {
+      origin: "null",
+      "x-forwarded-host": "app.test",
+      "x-forwarded-proto": "http",
+    },
+  });
+  assert.deepEqual(validateRecoveryRequestOrigin(request), {
+    status: "insecure_forwarded_proto",
+  });
+  const response = await handleConfirmPost(request);
+  assertSafeFailureResponse(response);
 });
 
-test("POST with cross-site Fetch Metadata exposes only cross_site_request", async () => {
-  const response = await handleConfirmPost(
-    new NextRequest("https://app.test/auth/confirm", {
-      method: "POST",
-      headers: {
-        origin: "null",
-        "x-forwarded-host": "app.test",
-        "x-forwarded-proto": "https",
-        "sec-fetch-site": "cross-site",
-        "sec-fetch-mode": "navigate",
-      },
-    })
-  );
-  assertSafeFailureReason(response, "cross_site_request");
+test("POST with cross-site Fetch Metadata is rejected generically", async () => {
+  const request = new NextRequest("https://app.test/auth/confirm", {
+    method: "POST",
+    headers: {
+      origin: "null",
+      "x-forwarded-host": "app.test",
+      "x-forwarded-proto": "https",
+      "sec-fetch-site": "cross-site",
+      "sec-fetch-mode": "navigate",
+    },
+  });
+  assert.deepEqual(validateRecoveryRequestOrigin(request), {
+    status: "cross_site_request",
+  });
+  const response = await handleConfirmPost(request);
+  assertSafeFailureResponse(response);
 });
 
-test("POST with non-navigation Fetch Metadata exposes only cross_site_request", async () => {
-  const response = await handleConfirmPost(
-    new NextRequest("https://app.test/auth/confirm", {
-      method: "POST",
-      headers: {
-        origin: "null",
-        "x-forwarded-host": "app.test",
-        "x-forwarded-proto": "https",
-        "sec-fetch-site": "same-origin",
-        "sec-fetch-mode": "cors",
-      },
-    })
-  );
-  assertSafeFailureReason(response, "cross_site_request");
+test("POST with non-navigation Fetch Metadata is rejected generically", async () => {
+  const request = new NextRequest("https://app.test/auth/confirm", {
+    method: "POST",
+    headers: {
+      origin: "null",
+      "x-forwarded-host": "app.test",
+      "x-forwarded-proto": "https",
+      "sec-fetch-site": "same-origin",
+      "sec-fetch-mode": "cors",
+    },
+  });
+  assert.deepEqual(validateRecoveryRequestOrigin(request), {
+    status: "cross_site_request",
+  });
+  const response = await handleConfirmPost(request);
+  assertSafeFailureResponse(response);
 });
 
-test("POST with malformed non-null Origin exposes only malformed_origin", async () => {
-  const response = await handleConfirmPost(
-    new NextRequest("https://app.test/auth/confirm", {
-      method: "POST",
-      headers: { origin: "not a valid origin" },
-    })
-  );
-  assertSafeFailureReason(response, "malformed_origin");
+test("POST with malformed non-null Origin is rejected generically", async () => {
+  const request = new NextRequest("https://app.test/auth/confirm", {
+    method: "POST",
+    headers: { origin: "not a valid origin" },
+  });
+  assert.deepEqual(validateRecoveryRequestOrigin(request), {
+    status: "malformed_origin",
+  });
+  const response = await handleConfirmPost(request);
+  assertSafeFailureResponse(response);
 });
 
-test("origin rejection logs only the safe classification", async () => {
+test("origin rejection emits no temporary diagnostic log", async () => {
   const warnings: unknown[][] = [];
   const originalWarn = console.warn;
   console.warn = (...args: unknown[]) => {
@@ -311,20 +316,12 @@ test("origin rejection logs only the safe classification", async () => {
       )
     );
 
-    assertSafeFailureReason(response, "origin_mismatch");
+    assertSafeFailureResponse(response);
   } finally {
     console.warn = originalWarn;
   }
 
-  assert.equal(warnings.length, 1);
-  assert.equal(warnings[0][0], "[RECOVERY_CONFIRM_ORIGIN_MISMATCH]");
-  const metadata = warnings[0][1] as Record<string, unknown>;
-  assert.deepEqual(Object.keys(metadata), [
-    "request_id",
-    "stage",
-    "timestamp",
-  ]);
-  assert.equal(metadata.stage, "RECOVERY_CONFIRM_ORIGIN_MISMATCH");
+  assert.equal(warnings.length, 0);
 
   const serializedWarnings = JSON.stringify(warnings);
   for (const forbidden of [
@@ -353,11 +350,11 @@ test("POST without pending cookie is rejected and expires the pending cookie", a
     }
   );
   assert.equal(response.status, 303);
-  assertSafeFailureReason(response, "cookie_missing");
+  assertSafeFailureResponse(response);
   assert.match(response.headers.get("set-cookie") || "", /Max-Age=0/i);
 });
 
-test("invalid pending cookie exposes only cookie_decrypt_failed", async () => {
+test("invalid pending cookie returns the generic invalid-link error", async () => {
   const response = await handleConfirmPost(
     new NextRequest("https://app.test/auth/confirm", {
       method: "POST",
@@ -370,10 +367,10 @@ test("invalid pending cookie exposes only cookie_decrypt_failed", async () => {
       throw new Error("must not execute");
     }
   );
-  assertSafeFailureReason(response, "cookie_decrypt_failed");
+  assertSafeFailureResponse(response);
 });
 
-test("invalid recovery secret exposes only secret_configuration_failed", async () => {
+test("invalid recovery secret returns the generic invalid-link error", async () => {
   const sealedPendingCookie = pendingCookie();
   const originalSecret = process.env.RECOVERY_FLOW_SECRET;
   process.env.RECOVERY_FLOW_SECRET = "invalid";
@@ -391,13 +388,13 @@ test("invalid recovery secret exposes only secret_configuration_failed", async (
         throw new Error("must not execute");
       }
     );
-    assertSafeFailureReason(response, "secret_configuration_failed");
+    assertSafeFailureResponse(response);
   } finally {
     restoreEnv("RECOVERY_FLOW_SECRET", originalSecret);
   }
 });
 
-test("invalid Supabase configuration exposes only supabase_configuration_failed", async () => {
+test("invalid Supabase configuration returns the generic invalid-link error", async () => {
   const originalUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const originalAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   process.env.NEXT_PUBLIC_SUPABASE_URL = "invalid";
@@ -413,14 +410,14 @@ test("invalid Supabase configuration exposes only supabase_configuration_failed"
         },
       })
     );
-    assertSafeFailureReason(response, "supabase_configuration_failed");
+    assertSafeFailureResponse(response);
   } finally {
     restoreEnv("NEXT_PUBLIC_SUPABASE_URL", originalUrl);
     restoreEnv("NEXT_PUBLIC_SUPABASE_ANON_KEY", originalAnonKey);
   }
 });
 
-test("Supabase client initialization failure exposes only supabase_client_init_failed", async () => {
+test("Supabase client initialization failure returns the generic invalid-link error", async () => {
   const originalUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const originalAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   process.env.NEXT_PUBLIC_SUPABASE_URL = "https://[.supabase.co";
@@ -436,7 +433,7 @@ test("Supabase client initialization failure exposes only supabase_client_init_f
         },
       })
     );
-    assertSafeFailureReason(response, "supabase_client_init_failed");
+    assertSafeFailureResponse(response);
   } finally {
     restoreEnv("NEXT_PUBLIC_SUPABASE_URL", originalUrl);
     restoreEnv("NEXT_PUBLIC_SUPABASE_ANON_KEY", originalAnonKey);
@@ -463,7 +460,7 @@ test("expired pending cookie is rejected without executing verifyOtp", async () 
     }
   );
   assert.equal(verificationCalls, 0);
-  assertSafeFailureReason(response, "cookie_expired");
+  assertSafeFailureResponse(response);
 });
 
 test("valid POST executes verifyOtp once, deletes pending cookie and creates grant", async () => {
@@ -515,10 +512,10 @@ test("reused token is rejected when Supabase reports it consumed", async () => {
     }
   );
   assert.equal(verificationCalls, 1);
-  assertSafeFailureReason(response, "otp_rejected");
+  assertSafeFailureResponse(response);
 });
 
-test("thrown OTP verification exposes only otp_rejected", async () => {
+test("thrown OTP verification returns the generic invalid-link error", async () => {
   const response = await handleConfirmPost(
     new NextRequest("https://app.test/auth/confirm", {
       method: "POST",
@@ -533,10 +530,10 @@ test("thrown OTP verification exposes only otp_rejected", async () => {
       );
     }
   );
-  assertSafeFailureReason(response, "otp_rejected");
+  assertSafeFailureResponse(response);
 });
 
-test("null or undefined verifyOtp data exposes only verifyotp_null_data", async () => {
+test("null or undefined verifyOtp data returns the generic invalid-link error", async () => {
   for (const data of [null, undefined]) {
     const response = await handleConfirmPost(
       new NextRequest("https://app.test/auth/confirm", {
@@ -551,11 +548,11 @@ test("null or undefined verifyOtp data exposes only verifyotp_null_data", async 
         error: null,
       })
     );
-    assertSafeFailureReason(response, "verifyotp_null_data");
+    assertSafeFailureResponse(response);
   }
 });
 
-test("missing user id exposes only verifyotp_user_missing", async () => {
+test("missing user id returns the generic invalid-link error", async () => {
   const response = await handleConfirmPost(
     new NextRequest("https://app.test/auth/confirm", {
       method: "POST",
@@ -572,10 +569,10 @@ test("missing user id exposes only verifyotp_user_missing", async () => {
       error: null,
     })
   );
-  assertSafeFailureReason(response, "verifyotp_user_missing");
+  assertSafeFailureResponse(response);
 });
 
-test("missing session access token exposes only verifyotp_session_missing", async () => {
+test("missing session access token returns the generic invalid-link error", async () => {
   const response = await handleConfirmPost(
     new NextRequest("https://app.test/auth/confirm", {
       method: "POST",
@@ -592,10 +589,10 @@ test("missing session access token exposes only verifyotp_session_missing", asyn
       error: null,
     })
   );
-  assertSafeFailureReason(response, "verifyotp_session_missing");
+  assertSafeFailureResponse(response);
 });
 
-test("missing session id exposes only verifyotp_session_id_missing", async () => {
+test("missing session id returns the generic invalid-link error", async () => {
   const accessTokenWithoutSessionId = [
     Buffer.from("{}").toString("base64url"),
     Buffer.from("{}").toString("base64url"),
@@ -617,10 +614,10 @@ test("missing session id exposes only verifyotp_session_id_missing", async () =>
       error: null,
     })
   );
-  assertSafeFailureReason(response, "verifyotp_session_id_missing");
+  assertSafeFailureResponse(response);
 });
 
-test("grant creation failure exposes only grant_failed", async () => {
+test("grant creation failure returns the generic invalid-link error", async () => {
   const sealedPendingCookie = pendingCookie();
   const originalDateNow = Date.now;
   let dateNowCalls = 0;
@@ -647,13 +644,13 @@ test("grant creation failure exposes only grant_failed", async () => {
         error: null,
       })
     );
-    assertSafeFailureReason(response, "grant_failed");
+    assertSafeFailureResponse(response);
   } finally {
     Date.now = originalDateNow;
   }
 });
 
-test("unexpected failure after client initialization exposes only unexpected_after_client_init", async () => {
+test("unexpected failure after client initialization returns the generic invalid-link error", async () => {
   const data = { user: { id: "user-1" } } as {
     user: { id: string };
     session?: never;
@@ -677,5 +674,5 @@ test("unexpected failure after client initialization exposes only unexpected_aft
       error: null,
     })
   );
-  assertSafeFailureReason(response, "unexpected_after_client_init");
+  assertSafeFailureResponse(response);
 });

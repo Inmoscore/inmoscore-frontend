@@ -34,6 +34,14 @@
 - Sesion normal sin autorizacion firmada no habilita reset.
 - Sesion verificada con autorizacion firmada si habilita reset.
 
+### Evidencia productiva de recovery - 2026-07-24
+
+- Password nueva permite login.
+- Password anterior deja de funcionar.
+- Enlace de recovery reutilizado es rechazado.
+- Exito redirige al login y muestra confirmacion.
+- Fallos publicos no exponen clasificaciones internas.
+
 ## Busqueda y creditos
 
 - Busqueda por cedula valida funciona.

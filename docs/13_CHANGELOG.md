@@ -1,5 +1,17 @@
 # InmoScore - Changelog
 
+## 2026-07-24
+
+### Password recovery validado en produccion
+
+- Flujo TokenHash validado de extremo a extremo con `verifyOtp`, recovery grant y sincronizacion backend.
+- Password nueva aceptada y password anterior rechazada en login.
+- Enlace de recovery confirmado como no reutilizable.
+- Redirect de servidor a `/login?password_reset=success` y mensaje de exito validados.
+- Retiradas las razones publicas temporales y los logs `RECOVERY_CONFIRM_*`/`RESET_PASSWORD_STAGE`.
+- Los fallos vuelven a exponer unicamente `/reset-password?error=invalid_link`.
+- Se mantienen la validacion de Origin detras del proxy de Vercel, cookies, rate limit y auditoria permanente.
+
 ## 2026-07-09
 
 ### Documentacion
@@ -38,10 +50,10 @@
 
 ## 2026-07-23
 
-### Password recovery hardening (implementacion local; pendiente validacion productiva)
+### Password recovery hardening (implementacion local)
 
 - Migracion a TokenHash y `verifyOtp` para recovery.
 - Intersticial `/auth/confirm` con cookie temporal cifrada y POST explicito.
 - Autorizacion firmada efimera ligada a usuario y `session_id` de Supabase.
 - Sin migraciones ni cambios de datos productivos.
-- No marcar IES como DONE hasta completar la prueba productiva.
+- La validacion productiva se completo el 2026-07-24.

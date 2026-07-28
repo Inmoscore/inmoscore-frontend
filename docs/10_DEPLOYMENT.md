@@ -76,6 +76,14 @@ probar `/auth/confirm`, actualizar la plantilla y solicitar un enlace nuevo. El
 `GET` solo cifra el TokenHash en una cookie temporal y redirige a una URL limpia;
 `verifyOtp` se ejecuta únicamente después del `POST` del usuario.
 
+Validacion productiva completada el 2026-07-24:
+
+- password nueva aceptada y password anterior rechazada;
+- enlace TokenHash no reutilizable;
+- sincronizacion Supabase/backend confirmada;
+- redirect final al login y mensaje de exito confirmados;
+- instrumentacion temporal retirada sin modificar cookies, grant ni validacion de Origin.
+
 ## Resend
 
 Validar:
