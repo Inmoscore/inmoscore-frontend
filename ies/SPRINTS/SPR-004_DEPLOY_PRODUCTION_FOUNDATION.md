@@ -2,7 +2,7 @@
 
 **Version:** v1.0
 **Fecha de creacion:** 2026-07-10
-**Ultima actualizacion:** 2026-07-24
+**Ultima actualizacion:** 2026-07-28
 **Responsable:** InmoScore Engineering Team
 **Estado:** IN_PROGRESS
 
@@ -44,7 +44,7 @@ Preparar la base productiva de InmoScore para una release beta controlada, dejan
 | FEAT-035 | FEATURE | Configuracion Supabase productiva | CRITICAL | READY |
 | FEAT-036 | FEATURE | Validacion Resend productiva | HIGH | READY |
 | FEAT-037 | FEATURE | Validacion Turnstile productiva | HIGH | READY |
-| STORY-001 | STORY | Como usuario quiero recuperar mi password de forma segura | CRITICAL | REVIEW |
+| STORY-001 | STORY | Como usuario quiero recuperar mi password de forma segura | CRITICAL | DONE |
 | STORY-002 | STORY | Como equipo de ingenieria quiero configurar variables Production en Vercel | CRITICAL | READY |
 | STORY-003 | STORY | Como equipo de ingenieria quiero confirmar backend productivo o decidir reemplazo de Railway | CRITICAL | READY |
 | STORY-004 | STORY | Como equipo de ingenieria quiero validar `NEXT_PUBLIC_API_URL` productiva | CRITICAL | READY |
@@ -155,6 +155,9 @@ Excepcion de alcance autorizada el 2026-07-22: correccion minima de reset passwo
 - El flujo redirige a `/login?password_reset=success`, muestra confirmacion y limpia el parametro sin recarga.
 - Se retiraron razones publicas y logs temporales de diagnostico; los fallos vuelven a exponer unicamente `error=invalid_link`.
 - La auditoria permanente del backend, el rate limit y los controles de TokenHash permanecen intactos.
+- La base configurada contiene seis eventos persistidos `password.reset.success`; cuatro coinciden con la ventana de validacion del 2026-07-24 y no existen eventos `password_changed` en esa ventana.
+- La evidencia persistida satisface los criterios actuales de FEAT-003 y STORY-001 sin exponer valores PII en este documento.
+- La normalizacion futura de taxonomia, correlacion, PII y persistencia se traslada a EPIC-010 Authentication Audit Refactor y no bloquea este cierre.
 
 ## 11. Plan de rollback
 
@@ -195,4 +198,6 @@ Excepcion de alcance autorizada el 2026-07-22: correccion minima de reset passwo
 - No registrar valores reales de secretos en este documento.
 - La correccion funcional de reset password fue autorizada explicitamente el 2026-07-22.
 - TASK-001, BUG-001 y RISK-001 quedaron cerrados con evidencia productiva el 2026-07-24.
+- FEAT-003 y STORY-001 quedaron cerrados con evidencia funcional y auditoria persistida el 2026-07-28.
+- EPIC-010 concentra la deuda independiente de refactor de auditoria de autenticacion.
 - El sprint completo permanece `IN_PROGRESS` porque los demas criterios de despliegue y QA no forman parte de esta validacion.

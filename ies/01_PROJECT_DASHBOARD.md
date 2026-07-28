@@ -2,7 +2,7 @@
 
 **Version:** v1.0
 **Fecha de creacion:** 2026-07-10
-**Ultima actualizacion:** 2026-07-24
+**Ultima actualizacion:** 2026-07-28
 **Responsable:** InmoScore Engineering Team
 **Estado del documento:** Active
 
@@ -48,7 +48,7 @@ Estados, prioridades, tipos e IDs oficiales se definen en `ies/STANDARDS.md`.
 | --- | --- | --- | --- |
 | Health Score global | TBD | TBD | Pendiente definir formula de medicion. |
 | Product Readiness | TBD | TBD | Pendiente checklist de release. |
-| Engineering Readiness | Recovery productivo validado | REVIEW | Reset password validado en produccion; otros criterios de release permanecen pendientes. |
+| Engineering Readiness | Recovery productivo cerrado | REVIEW | FEAT-003 y STORY-001 aceptados con evidencia funcional productiva y auditoria persistida; otros criterios de release permanecen pendientes. |
 | Operational Readiness | TBD | TBD | Pendiente despliegue y monitoreo beta. |
 
 ## 4. Progreso
@@ -77,9 +77,9 @@ Estados, prioridades, tipos e IDs oficiales se definen en `ies/STANDARDS.md`.
 | --- | --- | --- | --- |
 | Security | Recovery productivo validado | IN_PROGRESS | TokenHash, enlace de un solo uso, sincronizacion y cierre de sesion validados; otros controles de release siguen en revision. |
 | Secrets Exposure | TBD | TBD | Auditar variables y logs antes de release. |
-| Auth Hardening | Reset password funcional validado | REVIEW | Password nueva aceptada, anterior rechazada, enlace no reutilizable y redirect final correctos; el cierre global de auth mantiene criterios pendientes. |
+| Auth Hardening | Reset password funcional cerrado | REVIEW | FEAT-003 y STORY-001 estan DONE; el cierre global de auth mantiene criterios no relacionados pendientes. |
 | Turnstile | Implementado pendiente validacion productiva completa | REVIEW | El recovery productivo fue exitoso; registro y demas escenarios siguen pendientes de evidencia. |
-| Auditability | Implementada en modulos criticos | REVIEW | Mantener auditoria best-effort donde aplique. |
+| Auditability | Recovery auditado con taxonomia heredada | REVIEW | La evidencia `password.reset.success` satisface el cierre actual; EPIC-010 concentra el refactor no bloqueante de auditoria. |
 
 ## 7. Despliegue
 
@@ -139,3 +139,4 @@ Estados, prioridades, tipos e IDs oficiales se definen en `ies/STANDARDS.md`.
 | 2026-07-10 | Actualizacion de sprint actual a SPR-004 Deploy Production Foundation y registro de bloqueante Railway trial expirado. | InmoScore Engineering Team |
 | 2026-07-22 | Correccion local de reset password implementada; 19 pruebas, builds frontend/backend y lint dirigido exitosos. Validacion productiva permanece bloqueada. | InmoScore Engineering Team |
 | 2026-07-24 | Reset password validado en produccion: credencial nueva aceptada, anterior rechazada, enlace de un solo uso y redirect al login confirmados; RISK-001 y TASK-001 cerrados. | InmoScore Engineering Team |
+| 2026-07-28 | FEAT-003 y STORY-001 cerrados con evidencia persistida `password.reset.success`; EPIC-010 registra el refactor independiente de auditoria. El sprint permanece IN_PROGRESS. | InmoScore Engineering Team |

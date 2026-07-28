@@ -2,7 +2,7 @@
 
 **Version:** v1.0
 **Fecha de creacion:** 2026-07-10
-**Ultima actualizacion:** 2026-07-24
+**Ultima actualizacion:** 2026-07-28
 **Responsable:** InmoScore Engineering Team
 **Estado del documento:** Active
 
@@ -44,6 +44,7 @@ Este archivo es el backlog profesional del proyecto InmoScore. Organiza epicas, 
 | EPIC-007 | Billing y monetizacion | IN_PROGRESS | HIGH | InmoScore Engineering Team | Planes, Wompi, Stripe, webhooks y upgrades. |
 | EPIC-008 | Despliegue productivo | READY | CRITICAL | InmoScore Engineering Team | SPR-004 Deploy Production Foundation. |
 | EPIC-009 | Enterprise SaaS | BACKLOG | MEDIUM | InmoScore Engineering Team | Multi-tenant avanzado, roles y auditoria enterprise. |
+| EPIC-010 | Authentication Audit Refactor | BACKLOG | HIGH | InmoScore Engineering Team | Refactor independiente y no bloqueante para normalizar taxonomia, correlacion, PII y persistencia de auditoria. |
 
 ## 4. Features
 
@@ -53,7 +54,7 @@ Este archivo es el backlog profesional del proyecto InmoScore. Organiza epicas, 
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | FEAT-001 | Registro seguro | DONE | CRITICAL | EPIC-001 | Supabase Auth, Turnstile, backend auth | InmoScore Engineering Team | SPR-004 | Registro valida datos, verifica Turnstile y registra auditoria. | Funcionalidad actual. |
 | FEAT-002 | Login seguro | DONE | CRITICAL | EPIC-001 | Supabase/Auth backend, JWT, Turnstile | InmoScore Engineering Team | SPR-004 | Login exitoso emite sesion valida; Turnstile invalido bloquea; errores no filtran secretos. | Funcionalidad actual. |
-| FEAT-003 | Reset password productivo | REVIEW | CRITICAL | EPIC-001 | Supabase redirects, Resend, Turnstile, dominio productivo | InmoScore Engineering Team | SPR-004 | Email llega, redirect abre flujo correcto, password cambia en Supabase y login local, password anterior falla y evento queda auditado. | Comportamiento funcional validado en produccion; conservar REVIEW hasta cerrar toda la evidencia de auditoria. |
+| FEAT-003 | Reset password productivo | DONE | CRITICAL | EPIC-001 | Supabase redirects, Resend, Turnstile, dominio productivo | InmoScore Engineering Team | SPR-004 | Email llega, redirect abre flujo correcto, password cambia en Supabase y login local, password anterior falla y evento queda auditado. | Criterios aceptados con validacion productiva y evidencia persistida `password.reset.success`; el refactor de auditoria continua en EPIC-010. |
 | FEAT-004 | Auditoria de autenticacion | DONE | HIGH | EPIC-001 | authentication_audit_logs, security_events | InmoScore Engineering Team | SPR-003 | Registro, login, reset y cambios relevantes dejan evento auditable. | Funcionalidad actual. |
 
 ### EPIC-002 Busqueda y scoring
@@ -128,7 +129,7 @@ Este archivo es el backlog profesional del proyecto InmoScore. Organiza epicas, 
 
 | ID | Tipo | Titulo | Estado | Prioridad | Epic | Dependencias | Responsable | Sprint | Acceptance Criteria | Notas |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| STORY-001 | STORY | Como usuario quiero recuperar mi password de forma segura | REVIEW | CRITICAL | EPIC-001 | FEAT-003, FEAT-035, FEAT-036, FEAT-037 | InmoScore Engineering Team | SPR-004 | Respuesta generica, email llega, link funciona, ambos almacenes de password quedan sincronizados y auditoria registra exito. | Comportamiento funcional validado; cierre pendiente de evidencia completa de auditoria. |
+| STORY-001 | STORY | Como usuario quiero recuperar mi password de forma segura | DONE | CRITICAL | EPIC-001 | FEAT-003, FEAT-035, FEAT-036, FEAT-037 | InmoScore Engineering Team | SPR-004 | Respuesta generica, email llega, link funciona, ambos almacenes de password quedan sincronizados y auditoria registra exito. | Criterios aceptados con evidencia funcional productiva y eventos `password.reset.success` persistidos durante la ventana de validacion. |
 | STORY-002 | STORY | Como equipo de ingenieria quiero configurar variables Production en Vercel | READY | CRITICAL | EPIC-008 | FEAT-033 | InmoScore Engineering Team | SPR-004 | Variables requeridas existen y no hay secretos privados en variables publicas. | Incluido en SPR-004. |
 | STORY-003 | STORY | Como equipo de ingenieria quiero confirmar backend productivo o decidir reemplazo de Railway | READY | CRITICAL | EPIC-008 | FEAT-034 | InmoScore Engineering Team | SPR-004 | Railway queda restaurado/usable o reemplazo productivo queda decidido. | Railway trial expirado es bloqueante actual. |
 | STORY-004 | STORY | Como equipo de ingenieria quiero validar `NEXT_PUBLIC_API_URL` productiva | READY | CRITICAL | EPIC-008 | FEAT-033, FEAT-034 | InmoScore Engineering Team | SPR-004 | URL apunta al backend productivo correcto. | No debe apuntar a localhost o preview accidental. |
@@ -159,6 +160,10 @@ Este archivo es el backlog profesional del proyecto InmoScore. Organiza epicas, 
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | TASK-004 | Definir baseline de coverage | BACKLOG | MEDIUM | EPIC-008 | Herramienta de testing | InmoScore Engineering Team | TBD | Coverage reportable sin dato inventado. | Deuda de medicion. |
 | TASK-005 | Definir baseline de performance | BACKLOG | MEDIUM | EPIC-008 | Web/API metrics | InmoScore Engineering Team | TBD | Metrica de performance acordada y registrada. | Deuda de medicion. |
+| TASK-020 | Normalizar taxonomia de auditoria de autenticacion | BACKLOG | HIGH | EPIC-010 | authentication_audit_logs, security_events | InmoScore Engineering Team | TBD | Request, confirm, complete y change usan nombres inequivocos y documentados. | No bloquea FEAT-003 ni STORY-001. |
+| TASK-021 | Correlacionar eventos de recuperacion de extremo a extremo | BACKLOG | HIGH | EPIC-010 | request_id o identificador seguro equivalente | InmoScore Engineering Team | TBD | Solicitud, confirmacion y finalizacion pueden correlacionarse sin almacenar tokens ni cookies. | No bloquear el flujo valido si falla auditoria auxiliar. |
+| TASK-022 | Revisar PII en auditoria de autenticacion | BACKLOG | HIGH | EPIC-010 | Politica de minimizacion y retencion | InmoScore Engineering Team | TBD | Correo, IP y user agent tienen justificacion, acceso y retencion documentados o se minimizan. | Nunca registrar password, TokenHash, bearer token, cookies o secretos. |
+| TASK-023 | Fortalecer persistencia de auditoria de autenticacion | BACKLOG | HIGH | EPIC-010 | Supabase, observabilidad | InmoScore Engineering Team | TBD | Fallos de insercion son detectables y medibles manteniendo la politica best-effort acordada. | Evitar fallos silenciosos. |
 
 ## 8. Criterios generales de aceptacion
 
@@ -180,3 +185,4 @@ Este archivo es el backlog profesional del proyecto InmoScore. Organiza epicas, 
 | 2026-07-10 | Preparacion de SPR-004 Deploy Production Foundation; features de despliegue movidas a READY y asociadas a SPR-004. | InmoScore Engineering Team |
 | 2026-07-22 | FEAT-003 y STORY-001 pasan a REVIEW tras 19 pruebas y builds locales exitosos; BUG-001 y TASK-001 permanecen BLOCKED hasta validacion productiva. | InmoScore Engineering Team |
 | 2026-07-24 | TASK-001, TASK-006 y BUG-001 pasan a DONE tras validacion productiva; FEAT-003 y STORY-001 conservan REVIEW hasta cerrar evidencia de auditoria. | InmoScore Engineering Team |
+| 2026-07-28 | FEAT-003 y STORY-001 pasan a DONE con evidencia persistida `password.reset.success`; EPIC-010 y TASK-020 a TASK-023 absorben el refactor no bloqueante de auditoria. | InmoScore Engineering Team |

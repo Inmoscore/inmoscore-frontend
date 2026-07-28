@@ -41,6 +41,10 @@
 - Enlace de recovery reutilizado es rechazado.
 - Exito redirige al login y muestra confirmacion.
 - Fallos publicos no exponen clasificaciones internas.
+- La base configurada contiene seis eventos persistidos `password.reset.success`; cuatro coinciden con la ventana de validacion productiva.
+- No se incluyen correos, usuarios, IP ni otros valores PII en la evidencia documental.
+- Esta evidencia satisface el criterio actual de auditoria para FEAT-003 y STORY-001.
+- La taxonomia detallada `request`/`confirm`/`complete`/`change`, su correlacion y el fortalecimiento de persistencia quedan como deuda independiente en EPIC-010.
 
 ## Busqueda y creditos
 

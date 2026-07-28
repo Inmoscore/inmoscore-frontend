@@ -1,5 +1,16 @@
 # InmoScore - Changelog
 
+## 2026-07-28
+
+### Cierre documental de password recovery
+
+- FEAT-003 y STORY-001 pasan a DONE con la evidencia funcional productiva existente.
+- Se acepta `password.reset.success` como evidencia persistida del criterio actual de auditoria.
+- Se crea EPIC-010 Authentication Audit Refactor como deuda independiente y no bloqueante.
+- EPIC-010 concentra normalizacion de taxonomia, correlacion completa, revision de PII y fortalecimiento de persistencia.
+- El sprint SPR-004 permanece IN_PROGRESS.
+- La documentacion de API se alinea con `/api/auth/password-reset/complete`.
+
 ## 2026-07-24
 
 ### Password recovery validado en produccion

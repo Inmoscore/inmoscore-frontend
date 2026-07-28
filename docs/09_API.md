@@ -20,7 +20,7 @@
 - `POST /api/auth/login`
 - `POST /api/auth/resend-verification`
 - `POST /api/auth/password-reset`
-- `POST /api/auth/password-reset/success-audit`
+- `POST /api/auth/password-reset/complete`
 - `POST /api/auth/change-password`
 - `GET /api/account/status`
 
@@ -32,6 +32,8 @@ Reglas:
 - El POST valida Origin y cabeceras reenviadas compatibles con el proxy de Vercel antes de consumir el OTP.
 - La sesion de reset requiere una autorizacion firmada efimera, no solo una sesion normal.
 - Los rechazos de recovery redirigen de forma generica a `/reset-password?error=invalid_link`; no exponen etapas internas mediante query parameters.
+- `/api/auth/password-reset/complete` valida la sesion Supabase, sincroniza `public.users` y registra el resultado de auditoria.
+- La evidencia historica de finalizacion exitosa usa `password.reset.success`; su normalizacion futura pertenece a EPIC-010 Authentication Audit Refactor.
 - No filtrar existencia de usuarios de forma insegura.
 - Registrar auditoria de eventos relevantes.
 
