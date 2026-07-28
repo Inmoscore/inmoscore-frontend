@@ -25,13 +25,6 @@ export async function verifyTurnstileToken(
   }
 
   try {
-    console.log('[TURNSTILE_SECRET_DEBUG]', {
-      hasSecret: Boolean(secret),
-      secretLength: secret?.length || 0,
-      prefix: secret?.slice(0, 4),
-      suffix: secret?.slice(-2),
-    });
-
     const formData = new URLSearchParams();
     formData.set('secret', secret);
     formData.set('response', cleanToken);

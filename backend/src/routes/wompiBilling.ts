@@ -377,9 +377,9 @@ wompiBillingRouter.post('/create-wompi-checkout', async (req: AuthenticatedReque
       reference,
       amountInCents: descriptor.amountInCents,
       currency: descriptor.currency,
-      publicKeyPrefix: publicKey.slice(0, 9),
-      integrityPrefix: integritySecret.slice(0, 15),
-      signaturePrefix: signature.slice(0, 12),
+      hasPublicKey: Boolean(publicKey),
+      hasIntegritySecret: Boolean(integritySecret),
+      signatureGenerated: Boolean(signature),
       hasRedirectUrl: Boolean(redirectUrl),
     });
 

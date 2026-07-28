@@ -43,13 +43,16 @@ Variables esperadas:
 - Resend API key.
 - Turnstile secret key.
 - Wompi/Stripe secrets segun modulo activo.
-- CORS origin del frontend.
+- `FRONTEND_URL` con el origen HTTPS exacto del frontend productivo.
+- `ADDITIONAL_ALLOWED_ORIGINS` opcional, con origenes HTTPS exactos separados por
+  comas para previews autorizados.
 
 Reglas:
 
 - Backend debe exponer `GET /health`.
 - Configurar logs sin secretos.
-- Configurar dominios CORS exactos.
+- Configurar origenes CORS exactos; no usar comodines ni autorizacion automatica
+  para `*.vercel.app`.
 - Usar variables por entorno, no archivos `.env` en produccion.
 
 ## Supabase

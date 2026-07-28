@@ -18,8 +18,17 @@ Controles prioritarios:
 - Rate limiting en endpoints publicos.
 - Proteccion contra enumeracion de usuarios.
 - Sanitizacion de logs.
-- CORS configurado por entorno.
+- CORS configurado por entorno con coincidencia exacta de origen.
 - Headers de seguridad con Helmet.
+
+## CORS
+
+- `FRONTEND_URL` define el unico origen productivo obligatorio.
+- `ADDITIONAL_ALLOWED_ORIGINS` admite una lista opcional de origenes HTTPS exactos,
+  separados por comas, para previews autorizados expresamente.
+- No se autorizan dominios automaticamente por sufijo, incluido `*.vercel.app`.
+- Solicitudes sin `Origin` siguen permitidas para clientes no navegador y health checks.
+- Las solicitudes preflight `OPTIONS` y `credentials: true` permanecen habilitadas.
 
 ## JWT y autenticacion
 

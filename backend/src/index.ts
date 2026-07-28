@@ -3,8 +3,6 @@ import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import dotenv from 'dotenv';
-import path from 'path';
-import fs from 'fs';
 import dns from 'dns';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
@@ -33,6 +31,7 @@ import {
   verifyPasswordWithAnonymousClient,
 } from './lib/passwordRecovery';
 import { appendPublicPath, resolvePublicFrontendUrl } from './lib/publicUrl';
+import { buildAllowedOrigins, isCorsOriginAllowed } from './lib/corsOrigins';
 import { logLegalReportAudit } from './lib/legalReportAudit';
 import { logSecurityEvent } from './securityAudit';
 import {
@@ -91,14 +90,7 @@ type SecureDocumentAccessMetadata = {
 
 dns.setServers(['8.8.8.8', '8.8.4.4']);
 
-const envPath = path.resolve(process.cwd(), '.env');
-const envExists = fs.existsSync(envPath);
-const envResult = dotenv.config({ path: envPath });
-
-console.log('ENV PATH:', envPath);
-console.log('ENV exists:', envExists);
-console.log('DOTENV error:', envResult.error ? envResult.error.message : 'none');
-console.log('DOTENV parsed keys:', envResult.parsed ? Object.keys(envResult.parsed) : []);
+dotenv.config();
 
 const {
   PORT = '3001',
@@ -1782,23 +1774,16 @@ const rentalHistoryCreateSchema = z
 
 app.use(helmet());
 
-const allowedOrigins = [
-  'http://localhost:3000',
-  'http://localhost:3002',
-  'https://inmoscore-frontend.vercel.app',
-];
+const allowedOrigins = buildAllowedOrigins({
+  frontendUrl: PUBLIC_FRONTEND_URL,
+  additionalAllowedOrigins: process.env.ADDITIONAL_ALLOWED_ORIGINS,
+  requireHttps: process.env.NODE_ENV === 'production',
+});
 
 app.use(
   cors({
     origin: (origin, callback) => {
-      if (!origin) {
-        return callback(null, true);
-      }
-
-      const isAllowedOrigin = allowedOrigins.includes(origin);
-      const isVercelPreview = origin.endsWith('.vercel.app');
-
-      if (isAllowedOrigin || isVercelPreview) {
+      if (isCorsOriginAllowed(origin, allowedOrigins)) {
         return callback(null, true);
       }
 
