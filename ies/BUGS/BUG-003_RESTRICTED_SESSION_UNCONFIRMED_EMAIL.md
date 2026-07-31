@@ -1,10 +1,10 @@
 # BUG-003 - Cuentas con correo no confirmado reciben sesion completa y pueden ejecutar operaciones sensibles
 
-**Version:** v1.0
+**Version:** v1.1
 **Fecha de creacion:** 2026-07-30
-**Ultima actualizacion:** 2026-07-30
+**Ultima actualizacion:** 2026-07-31
 **Responsable:** InmoScore Engineering Team
-**Estado:** REVIEW
+**Estado:** DONE
 **Prioridad:** HIGH
 
 ## 1. Resumen
@@ -26,7 +26,7 @@ incluidas consultas, documentos, pagos, credenciales y, si ya tenia rol, adminis
 
 ## 4. Resultado actual
 
-La implementacion local emite sesion `restricted`, consulta el campo canonico
+La implementacion productiva emite sesion `restricted`, consulta el campo canonico
 `public.users.email_verified_at` y bloquea por defecto rutas fuera de la allowlist exacta.
 
 ## 5. Resultado esperado
@@ -40,7 +40,16 @@ confirmacion y volver a iniciar sesion para obtener alcance `full`.
 - Pruebas backend de persistencia, sesion, admin y llamada directa.
 - Pruebas frontend de confirmacion y redireccion centralizada.
 - Builds frontend y backend exitosos.
-- Pendiente validacion production-like.
+- Railway y Vercel reportaron despliegue exitoso para el SHA validado.
+- `GET /health` respondio `200` antes y despues de la prueba controlada.
+- La cuenta sin confirmar recibio sesion `restricted`; checkout y busqueda protegida
+  respondieron `403 EMAIL_VERIFICATION_REQUIRED`.
+- La confirmacion se realizo administrativamente mediante Supabase Auth para la prueba;
+  la sesion anterior permanecio restringida y el nuevo login emitio sesion `full`.
+- `POST /api/billing/create-wompi-checkout` respondio `200`, genero una referencia unica,
+  creo una sola fila `created` y entrego la configuracion necesaria para cargar el widget.
+- El widget Wompi cargo sin autorizar pago, capturar fondos ni activar el plan.
+- La fila de checkout, el perfil QA y el usuario de Supabase Auth fueron eliminados al finalizar.
 
 ## 7. Dependencias
 
@@ -57,4 +66,7 @@ Supabase Auth, Resend, `public.users.email_verified_at` y migracion no destructi
 
 ## 9. Notas
 
-No cerrar como `DONE` hasta aplicar la migracion y validar el flujo production-like.
+La migracion productiva y el flujo controlado fueron validados el 2026-07-31. El incidente
+previo `500` del checkout quedo resuelto al configurar en Railway las cuatro variables Wompi
+requeridas y redesplegar el servicio. No se documentan valores, fragmentos ni longitudes de
+las llaves.

@@ -106,6 +106,22 @@
 - Verificacion/reconciliacion admin funciona.
 - Upgrade event queda registrado.
 
+### Evidencia productiva controlada de autenticacion y checkout - 2026-07-31
+
+- Railway y Vercel reportaron build exitoso; `GET /health` respondio `200` antes y despues.
+- La cuenta QA sin confirmar obtuvo sesion `restricted` y las operaciones protegidas
+  respondieron `403 EMAIL_VERIFICATION_REQUIRED`.
+- La confirmacion se realizo administrativamente mediante Supabase Auth; la sesion previa
+  siguio restringida y el nuevo login emitio sesion `full`.
+- El incidente inicial `500` de checkout fue resuelto al configurar en Railway las cuatro
+  variables Wompi requeridas y redesplegar, sin cambios de codigo.
+- `POST /api/billing/create-wompi-checkout` respondio `200`, genero una referencia unica y
+  registro exactamente una fila `created`.
+- La respuesta entrego la configuracion completa y el widget Wompi cargo correctamente.
+- No se autorizo pago, no se capturaron fondos y el plan no se activo.
+- La fila de checkout y la cuenta QA fueron eliminadas; no quedaron cuentas QA coincidentes.
+- La evidencia no contiene valores, fragmentos ni longitudes de llaves Wompi.
+
 ## Seguridad
 
 - No hay secrets en consola del navegador.

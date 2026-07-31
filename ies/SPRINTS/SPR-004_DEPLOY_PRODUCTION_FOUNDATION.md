@@ -2,7 +2,7 @@
 
 **Version:** v1.0
 **Fecha de creacion:** 2026-07-10
-**Ultima actualizacion:** 2026-07-28
+**Ultima actualizacion:** 2026-07-31
 **Responsable:** InmoScore Engineering Team
 **Estado:** IN_PROGRESS
 
@@ -54,7 +54,7 @@ Preparar la base productiva de InmoScore para una release beta controlada, dejan
 | STORY-008 | STORY | Como equipo de QA quiero probar registro, login, reset password, busqueda, reporte e historial | CRITICAL | READY |
 | STORY-009 | STORY | Como equipo de auditoria quiero validar auditorias search, legal report y authentication | CRITICAL | READY |
 | STORY-010 | STORY | Como equipo de ingenieria quiero revisar logs temporales antes del despliegue | HIGH | READY |
-| BUG-003 | BUG | Cuentas con correo no confirmado reciben sesion completa y pueden ejecutar operaciones sensibles | HIGH | REVIEW |
+| BUG-003 | BUG | Cuentas con correo no confirmado reciben sesion completa y pueden ejecutar operaciones sensibles | HIGH | DONE |
 
 ## 4. Historias incluidas
 
@@ -76,7 +76,7 @@ Preparar la base productiva de InmoScore para una release beta controlada, dejan
 | ID | Dependencia | Tipo | Estado | Nota |
 | --- | --- | --- | --- | --- |
 | TASK-002 | Auditar variables productivas | TASK | READY | Necesario antes de validar frontend productivo. |
-| TASK-003 | Confirmar hosting backend productivo | TASK | BLOCKED | Bloqueado por Railway trial expirado hasta restaurar servicio o decidir reemplazo. |
+| TASK-003 | Confirmar hosting backend productivo | TASK | DONE | Railway desplegado y validado con build exitoso y `GET /health` en `200`. |
 | TASK-006 | Configurar redirects Supabase Auth productivos | TASK | DONE | Redirect de recovery validado en el flujo productivo. |
 | TASK-007 | Configurar dominios Turnstile productivos | TASK | READY | Requerido para auth productiva. |
 | TASK-008 | Validar Resend con remitente `inmoscore.com` | TASK | READY | Requerido para correos de autenticacion. |
@@ -99,7 +99,7 @@ Excepcion de alcance autorizada el 2026-07-22: correccion minima de reset passwo
 | --- | --- | --- | --- | --- |
 | RISK-001 | Reset password falla en produccion por redirects o sincronizacion | CRITICAL | DONE | Mitigado mediante validacion productiva del cambio, sincronizacion, enlace de un solo uso y redirect final. |
 | RISK-002 | Exposicion accidental de secretos | CRITICAL | REVIEW | Revisar variables Vercel/backend y logs temporales antes del despliegue. |
-| RISK-005 | Backend Railway con trial expirado bloquea despliegue | CRITICAL | BLOCKED | Restaurar Railway o decidir reemplazo documentado antes de continuar. |
+| RISK-005 | Backend Railway con trial expirado bloquea despliegue | CRITICAL | DONE | Railway restaurado y validado productivamente el 2026-07-31. |
 | RISK-006 | `NEXT_PUBLIC_API_URL` apunta a entorno incorrecto | CRITICAL | READY | Validar valor productivo antes de pruebas funcionales. |
 | RISK-007 | Turnstile bloquea usuarios reales por dominio no autorizado | HIGH | READY | Configurar dominios productivos y probar tokens validos. |
 | RISK-008 | Resend no entrega correos desde `inmoscore.com` | HIGH | READY | Validar dominio/remitente y entrega real. |
@@ -108,7 +108,7 @@ Excepcion de alcance autorizada el 2026-07-22: correccion minima de reset passwo
 
 | ID | Bloqueante | Estado | Accion |
 | --- | --- | --- | --- |
-| TASK-003 | Backend Railway con trial expirado | BLOCKED | Restaurar Railway o decidir reemplazo productivo compatible con Express. |
+| TASK-003 | Confirmar hosting backend productivo | DONE | Railway productivo responde `GET /health` con `200`. |
 | TASK-001 | Validar reset password en produccion | DONE | Evidencia productiva completada el 2026-07-24. |
 
 ## 9. Criterios de aceptacion
@@ -162,6 +162,27 @@ Excepcion de alcance autorizada el 2026-07-22: correccion minima de reset passwo
 - La evidencia persistida satisface los criterios actuales de FEAT-003 y STORY-001 sin exponer valores PII en este documento.
 - La normalizacion futura de taxonomia, correlacion, PII y persistencia se traslada a EPIC-010 Authentication Audit Refactor y no bloquea este cierre.
 
+### Evidencia productiva controlada 2026-07-31
+
+- Railway y Vercel reportaron builds exitosos para el despliegue validado.
+- `GET /health` respondio `200` antes y despues de la prueba controlada.
+- El registro QA emitio sesion `restricted`; la busqueda y el checkout protegidos
+  respondieron `403 EMAIL_VERIFICATION_REQUIRED` antes de confirmar el correo.
+- La confirmacion se ejecuto administrativamente mediante Supabase Auth para la prueba.
+- La sesion anterior permanecio restringida; un nuevo login respondio `200` y emitio
+  sesion `full`.
+- El primer intento productivo de checkout habia respondido `500`. La incidencia quedo
+  resuelta al configurar directamente en Railway las cuatro variables Wompi requeridas y
+  redesplegar el servicio, sin cambios de codigo.
+- La repeticion controlada de `POST /api/billing/create-wompi-checkout` respondio `200`,
+  genero una referencia unica y una sola fila `created` asociada al usuario QA.
+- La respuesta incluyo todos los campos necesarios y el widget Wompi cargo correctamente.
+- La prueba se detuvo antes de autorizar el pago: no hubo captura de fondos ni activacion
+  del plan; el plan permanecio `free` con el mismo limite diario.
+- La fila de checkout, el perfil QA y el usuario de Supabase Auth fueron eliminados; la
+  auditoria final encontro cero cuentas QA coincidentes.
+- No se registran valores, fragmentos ni longitudes de llaves Wompi en la evidencia.
+
 ## 11. Plan de rollback
 
 | Escenario | Accion de rollback |
@@ -203,4 +224,6 @@ Excepcion de alcance autorizada el 2026-07-22: correccion minima de reset passwo
 - TASK-001, BUG-001 y RISK-001 quedaron cerrados con evidencia productiva el 2026-07-24.
 - FEAT-003 y STORY-001 quedaron cerrados con evidencia funcional y auditoria persistida el 2026-07-28.
 - EPIC-010 concentra la deuda independiente de refactor de auditoria de autenticacion.
+- BUG-003 y TASK-003 quedaron cerrados con evidencia productiva controlada el 2026-07-31.
+- El incidente `500` del checkout quedo resuelto mediante configuracion de variables Wompi en Railway, sin cambios de codigo.
 - El sprint completo permanece `IN_PROGRESS` porque los demas criterios de despliegue y QA no forman parte de esta validacion.

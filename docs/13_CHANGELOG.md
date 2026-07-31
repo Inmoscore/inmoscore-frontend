@@ -1,5 +1,22 @@
 # InmoScore - Changelog
 
+## 2026-07-31
+
+### Cierre productivo de BUG-003 y TASK-003
+
+- BUG-003 pasa de REVIEW a DONE con validacion productiva de sesion restringida, bloqueo
+  `403 EMAIL_VERIFICATION_REQUIRED`, confirmacion y nuevo login con alcance `full`.
+- TASK-003 pasa de BLOCKED a DONE: Railway queda confirmado como backend productivo y
+  `GET /health` responde `200`.
+- El incidente `500` de `POST /api/billing/create-wompi-checkout` queda resuelto mediante
+  configuracion de las cuatro variables Wompi requeridas en Railway y redespliegue del
+  servicio, sin cambios de codigo.
+- El checkout controlado responde `200`, genera una referencia unica, registra una sola
+  fila `created` y permite cargar el widget.
+- No se autoriza pago, no se capturan fondos y no se activa el plan.
+- La fila de checkout y la cuenta QA se eliminan al finalizar.
+- SPR-004 permanece `IN_PROGRESS`; no se cierran los demas criterios del sprint.
+
 ## 2026-07-28
 
 ### Creacion de SPR-005 Production Readiness

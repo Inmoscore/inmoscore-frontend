@@ -87,7 +87,7 @@ Estados, prioridades, tipos e IDs oficiales se definen en `ies/STANDARDS.md`.
 | --- | --- | --- | --- |
 | Deploy | Preparacion productiva | READY | Asociado a SPR-004. |
 | Frontend Deploy | TBD | READY | Vercel. |
-| Backend Deploy | Bloqueado por Railway trial expirado | BLOCKED | Confirmar Railway o alternativa. |
+| Backend Deploy | Railway productivo validado | DONE | Build exitoso y `GET /health` con respuesta `200` el 2026-07-31. |
 | Supabase Redirects | Configuracion productiva reportada | REVIEW | Site URL y redirects fueron confirmados; falta validar el flujo desplegado. |
 | Resend | Pendiente validacion productiva | READY | Validar remitente de inmoscore.com. |
 
@@ -99,7 +99,7 @@ Estados, prioridades, tipos e IDs oficiales se definen en `ies/STANDARDS.md`.
 | Nombre | Deploy Production Foundation |
 | Estado | IN_PROGRESS |
 | Objetivo | Preparar base productiva: Vercel Production, backend productivo, API URL, Supabase Auth redirects, Turnstile, Resend y pruebas criticas. |
-| Bloqueante principal | Backend Railway con trial expirado. |
+| Bloqueante principal | Sin bloqueante activo de hosting; permanecen criterios funcionales y operativos del sprint. |
 | Definition of Done | Variables productivas revisadas, backend confirmado o reemplazo decidido, auth y flujos criticos validados, auditorias revisadas y logs temporales limpios. |
 
 ### Sprint planificado
@@ -122,7 +122,7 @@ Estados, prioridades, tipos e IDs oficiales se definen en `ies/STANDARDS.md`.
 | RISK-002 | Exposicion accidental de secretos | CRITICAL | REVIEW | Auditar variables frontend/backend y logs. | InmoScore Engineering Team |
 | RISK-003 | Doble consumo de creditos | HIGH | REVIEW | Mantener idempotencia y auditoria de busqueda. | InmoScore Engineering Team |
 | RISK-004 | Reportes sin trazabilidad legal suficiente | HIGH | REVIEW | Conservar evidencia, revision, estado y logs. | InmoScore Engineering Team |
-| RISK-005 | Backend Railway con trial expirado bloquea despliegue | CRITICAL | BLOCKED | Restaurar Railway o decidir reemplazo productivo compatible con Express. | InmoScore Engineering Team |
+| RISK-005 | Backend Railway con trial expirado bloquea despliegue | CRITICAL | DONE | Railway restaurado y validado con build exitoso y healthcheck productivo. | InmoScore Engineering Team |
 
 ## 10. Bloqueantes
 
@@ -130,7 +130,7 @@ Estados, prioridades, tipos e IDs oficiales se definen en `ies/STANDARDS.md`.
 | --- | --- | --- | --- | --- | --- |
 | TASK-001 | Validar reset password en produccion | CRITICAL | DONE | Supabase, backend y dominio productivo | Evidencia productiva completada el 2026-07-24. |
 | TASK-002 | Auditar variables productivas | HIGH | READY | Vercel, backend host, Supabase | Revisar variables publicas y privadas. |
-| TASK-003 | Backend Railway con trial expirado | CRITICAL | BLOCKED | Railway o alternativa | Restaurar Railway o seleccionar reemplazo productivo. |
+| TASK-003 | Confirmar hosting backend productivo | CRITICAL | DONE | Railway | Servicio desplegado; `GET /health` responde `200`. |
 
 ## 11. Proxima release
 
@@ -153,3 +153,4 @@ Estados, prioridades, tipos e IDs oficiales se definen en `ies/STANDARDS.md`.
 | 2026-07-24 | Reset password validado en produccion: credencial nueva aceptada, anterior rechazada, enlace de un solo uso y redirect al login confirmados; RISK-001 y TASK-001 cerrados. | InmoScore Engineering Team |
 | 2026-07-28 | FEAT-003 y STORY-001 cerrados con evidencia persistida `password.reset.success`; EPIC-010 registra el refactor independiente de auditoria. El sprint permanece IN_PROGRESS. | InmoScore Engineering Team |
 | 2026-07-28 | SPR-005 Production Readiness creado en REVIEW con cinco frentes: infraestructura, monetizacion, seguridad, operacion y Go Live. SPR-004 permanece IN_PROGRESS. | InmoScore Engineering Team |
+| 2026-07-31 | Railway, `/health`, sesion restringida y checkout Wompi validados en produccion. BUG-003 y TASK-003 pasan a DONE; el `500` de checkout queda resuelto mediante configuracion de variables Wompi. SPR-004 permanece IN_PROGRESS. | InmoScore Engineering Team |
