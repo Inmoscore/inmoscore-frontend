@@ -138,6 +138,51 @@ test("GET and scanner-only GET never execute verifyOtp", async () => {
   assert.equal(verificationCalls, 0);
 });
 
+test("signup confirmation works without a full InmoScore session and returns to pending screen", async () => {
+  let verificationCalls = 0;
+  const response = await handleConfirmGet(
+    new NextRequest(
+      "https://app.test/auth/confirm?token_hash=email-token&type=signup&next=/correo-pendiente"
+    ),
+    async (params) => {
+      verificationCalls += 1;
+      assert.deepEqual(params, {
+        token_hash: "email-token",
+        type: "signup",
+      });
+      return {
+        data: {
+          user: { id: "user-1" } as never,
+          session: null,
+        },
+        error: null,
+      };
+    }
+  );
+
+  assert.equal(verificationCalls, 1);
+  assert.equal(
+    response.headers.get("location"),
+    "https://app.test/correo-pendiente?confirmed=true"
+  );
+});
+
+test("invalid signup confirmation returns safely to pending screen", async () => {
+  const response = await handleConfirmGet(
+    new NextRequest(
+      "https://app.test/auth/confirm?token_hash=&type=signup&next=/correo-pendiente"
+    ),
+    async () => {
+      throw new Error("must not run");
+    }
+  );
+
+  assert.equal(
+    response.headers.get("location"),
+    "https://app.test/correo-pendiente?error=invalid_link"
+  );
+});
+
 test("clean interstitial HTML never contains token_hash or a hidden credential", () => {
   const html = renderConfirmHtml(true);
   assert.match(html, /Continuar con la recuperación/);

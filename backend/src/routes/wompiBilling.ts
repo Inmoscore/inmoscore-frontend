@@ -12,6 +12,7 @@ import {
   getWompiIntegritySecret,
   getWompiPublicKey,
 } from '../lib/wompi';
+import { getPlanActivationDecision } from '../lib/emailVerificationPolicy';
 
 type AuthenticatedRequest = Request & {
   user?: {
@@ -35,6 +36,11 @@ type WompiUserPlanRow = {
   id: string;
   plan_type: string | null;
   daily_search_limit: number | null;
+};
+
+type WompiUserEmailStateRow = {
+  id: string;
+  email_verified_at: string | null;
 };
 
 type WompiTransactionPayload = {
@@ -241,6 +247,24 @@ async function getCurrentUserPlan(userId: string): Promise<WompiUserPlanRow> {
   }
 
   return data as WompiUserPlanRow;
+}
+
+async function getPersistedUserEmailState(userId: string): Promise<WompiUserEmailStateRow> {
+  const { data, error } = await supabase
+    .from('users')
+    .select('id, email_verified_at')
+    .eq('id', userId)
+    .maybeSingle();
+
+  if (error) {
+    throw error;
+  }
+
+  if (!data) {
+    throw new Error(`Usuario ${userId} no encontrado para validacion de correo`);
+  }
+
+  return data as WompiUserEmailStateRow;
 }
 
 async function activateUserPlan(payment: WompiPaymentRow, planType: WompiPlanSlug): Promise<WompiUserPlanRow> {
@@ -491,7 +515,11 @@ export async function wompiWebhookHandler(req: Request, res: Response): Promise<
 
     const existingPayment = payment as WompiPaymentRow;
 
-    if (existingPayment.processed_at || existingPayment.status === 'approved') {
+    if (
+      existingPayment.processed_at ||
+      existingPayment.status === 'approved' ||
+      existingPayment.status === 'approved_pending_email_verification'
+    ) {
       console.log('[WOMPI_WEBHOOK_DUPLICATE]', {
         transactionId,
         paymentId: existingPayment.id,
@@ -523,6 +551,36 @@ export async function wompiWebhookHandler(req: Request, res: Response): Promise<
 
     if (mappedStatus !== 'approved') {
       res.status(200).json({ success: true, received: true });
+      return;
+    }
+
+    if (!existingPayment.user_id) {
+      throw new Error(`Pago Wompi ${existingPayment.reference} no tiene user_id`);
+    }
+
+    const emailState = await getPersistedUserEmailState(existingPayment.user_id);
+
+    if (getPlanActivationDecision(emailState.email_verified_at) === 'defer_email_verification') {
+      await updateWompiPayment({
+        reference,
+        status: 'approved_pending_email_verification',
+        wompiStatus: status,
+        transactionId,
+        rawEvent: body,
+        processedAt: null,
+      });
+
+      console.log('[WOMPI_WEBHOOK_APPROVED_PENDING_EMAIL_VERIFICATION]', {
+        paymentId: existingPayment.id,
+        transactionId,
+        planType: planTypeFromReference,
+      });
+
+      res.status(200).json({
+        success: true,
+        received: true,
+        plan_activation: 'pending_email_verification',
+      });
       return;
     }
 

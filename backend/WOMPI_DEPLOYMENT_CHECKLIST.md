@@ -334,6 +334,19 @@ limit 50;
 - Pagos sin `wompi_transaction_id` no permiten reconciliacion por ID.
 - Verificacion manual muestra resultado claro y no filtra datos sensibles.
 - Reconciliacion manual pide confirmacion antes de actuar.
+- `approved_pending_email_verification` identifica pagos aprobados cuyo plan no fue activado.
+
+### Reconciliacion posterior a verificacion de correo
+
+1. El webhook valido registra transaccion, payload y estado
+   `approved_pending_email_verification` cuando `users.email_verified_at` es nulo.
+2. Reintentos del mismo evento responden como duplicados y no activan el plan.
+3. El usuario confirma el correo y `/api/account/status` sincroniza el timestamp canonico.
+4. Un admin con correo confirmado, rol vigente y MFA reciente usa
+   `POST /api/admin/wompi-payments/:paymentId/reconcile`.
+5. La reconciliacion vuelve a consultar Wompi, valida transaccion, referencia, estado,
+   monto y moneda, comprueba `users.email_verified_at`, activa el plan una sola vez y
+   registra `plan_change_logs` y auditoria administrativa.
 
 ### `/admin > Historial`
 
@@ -356,6 +369,7 @@ limit 50;
 - Pagos sin `wompi_transaction_id` no son reconciliables por ID. No forzar activacion basada solo en referencia.
 - No confiar solo en `reference`: validar transaccion contra Wompi, monto, moneda, estado y plan.
 - Reintentos de webhook pueden llegar duplicados o fuera de orden. La idempotencia debe mantenerse.
+- Un pago aprobado pendiente de correo requiere reconciliacion administrativa posterior; no debe activarse manualmente fuera del endpoint auditado.
 - Ambientes cruzados sandbox/produccion pueden producir firmas invalidas o transacciones imposibles de verificar.
 - Logs con payloads completos pueden contener datos sensibles; limitar acceso y retencion.
 
@@ -393,6 +407,7 @@ Produccion esta lista cuando:
 - Webhook duplicado es idempotente.
 - Verificacion admin consulta Wompi por ID y maneja pagos sin ID.
 - Reconciliacion admin activa solo con confirmacion `APPROVED` desde Wompi.
+- Reconciliacion de `approved_pending_email_verification` exige `users.email_verified_at`.
 - `/upgrade`, `/admin > Pagos`, `/admin > Historial` y `/buscar` fueron validados.
 - Queries de auditoria muestran consistencia entre `wompi_payments`, `users` y `plan_change_logs`.
 - No hay secretos en repositorio remoto, logs compartidos ni capturas.

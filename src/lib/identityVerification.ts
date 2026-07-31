@@ -1,6 +1,7 @@
 'use client';
 
 import { getToken } from '@/lib/auth';
+import { emailVerificationFetch as fetch } from '@/lib/emailVerification';
 
 export type IdentityVerificationStatus =
   | 'unverified'

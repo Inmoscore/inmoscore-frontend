@@ -7,7 +7,7 @@ import dns from 'dns';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { z } from 'zod';
-import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { createClient, SupabaseClient, User as SupabaseAuthUser } from '@supabase/supabase-js';
 import billingRouter, { stripeWebhookHandler } from './routes/billing';
 import wompiBillingRouter, { wompiWebhookHandler } from './routes/wompiBilling';
 import {
@@ -57,6 +57,12 @@ import {
   verifyObjectExists,
 } from './lib/secureDocuments';
 import { verifyTurnstileToken } from './lib/turnstile';
+import {
+  EmailSessionScope,
+  EmailVerificationRequest,
+  isRestrictedSessionAllowed,
+  requireConfirmedEmailSession,
+} from './lib/emailVerificationPolicy';
 
 type SecureDocumentAccessMetadata = {
   id: string;
@@ -133,6 +139,7 @@ interface JwtPayload {
   id: string;
   email: string;
   tipo_usuario: string;
+  session_scope?: EmailSessionScope;
 }
 
 interface AuthRequest extends Request {
@@ -1853,6 +1860,17 @@ const limiter = rateLimit({
 
 app.use(limiter);
 
+app.use((req: EmailVerificationRequest, res: Response, next: NextFunction) => {
+  if (!req.path.startsWith('/api/') || isRestrictedSessionAllowed(req.method, req.path)) {
+    next();
+    return;
+  }
+
+  authenticateToken(req, res, () => {
+    void requireConfirmedEmailSession(req, res, next);
+  });
+});
+
 app.use('/api/billing', authenticateToken, billingRouter);
 app.use('/api/billing', authenticateToken, wompiBillingRouter);
 
@@ -1860,12 +1878,16 @@ app.use('/api/billing', authenticateToken, wompiBillingRouter);
 // HELPERS
 // ================================
 
-function signToken(user: { id: string; email: string; tipo_usuario: string }): string {
+function signToken(
+  user: { id: string; email: string; tipo_usuario: string },
+  sessionScope: EmailSessionScope
+): string {
   return jwt.sign(
     {
       id: user.id,
       email: user.email,
       tipo_usuario: user.tipo_usuario,
+      session_scope: sessionScope,
     },
     JWT_SECRET as string,
     { expiresIn: '7d' }
@@ -2639,17 +2661,29 @@ async function getSupabaseAuthUserForPublicUser(user: {
   id: string;
   email: string;
   auth_user_id?: string | null;
-}) {
-  const candidateIds = [user.auth_user_id, user.id].filter(Boolean) as string[];
+}): Promise<
+  | { status: 'found'; user: SupabaseAuthUser }
+  | { status: 'not_found' | 'error'; user: null }
+> {
+  const candidateIds = Array.from(
+    new Set([user.auth_user_id, user.id].filter(Boolean) as string[])
+  );
+  let lookupFailed = false;
 
   for (const authUserId of candidateIds) {
     const { data, error } = await supabase.auth.admin.getUserById(authUserId);
     if (!error && data.user) {
-      return data.user;
+      return { status: 'found', user: data.user };
+    }
+    if (error) {
+      lookupFailed = true;
     }
   }
 
-  return null;
+  return {
+    status: lookupFailed ? 'error' : 'not_found',
+    user: null,
+  };
 }
 
 async function syncEmailVerificationFromSupabase(
@@ -2663,15 +2697,45 @@ async function syncEmailVerificationFromSupabase(
     document_type?: string | null;
     document_number?: string | null;
   }
-): Promise<{ email_verified: boolean; email_verified_at: string | null }> {
-  const authUser = await getSupabaseAuthUserForPublicUser(user);
+): Promise<{
+  email_verified: boolean;
+  email_verified_at: string | null;
+  synchronization_status: 'confirmed' | 'pending' | 'error' | 'inconsistent';
+}> {
+  const authLookup = await getSupabaseAuthUserForPublicUser(user);
+  const authUser = authLookup.user;
+
+  if (authLookup.status !== 'found' || !authUser) {
+    console.warn('[EMAIL_VERIFICATION_SYNC_FAILED]', {
+      user_id: user.id,
+      reason: authLookup.status,
+    });
+    return {
+      email_verified: false,
+      email_verified_at: null,
+      synchronization_status: authLookup.status === 'error' ? 'error' : 'inconsistent',
+    };
+  }
+
   const authVerifiedAt =
     authUser?.email_confirmed_at || authUser?.confirmed_at || null;
   const currentVerifiedAt = user.email_verified_at || null;
-  const verifiedAt = currentVerifiedAt || authVerifiedAt;
-  const emailVerified = Boolean(verifiedAt || user.email_verificado);
 
-  if (authVerifiedAt && !currentVerifiedAt) {
+  if (!authVerifiedAt) {
+    if (currentVerifiedAt) {
+      console.warn('[EMAIL_VERIFICATION_SYNC_FAILED]', {
+        user_id: user.id,
+        reason: 'persisted_confirmed_but_supabase_unconfirmed',
+      });
+    }
+    return {
+      email_verified: false,
+      email_verified_at: null,
+      synchronization_status: currentVerifiedAt ? 'inconsistent' : 'pending',
+    };
+  }
+
+  if (authVerifiedAt !== currentVerifiedAt) {
     const updatePayload: Record<string, unknown> = {
       email_verified_at: authVerifiedAt,
       email_verified: true,
@@ -2692,7 +2756,12 @@ async function syncEmailVerificationFromSupabase(
         user_id: user.id,
         error: error.message,
       });
-    } else {
+      return {
+        email_verified: false,
+        email_verified_at: null,
+        synchronization_status: 'error',
+      };
+    } else if (!currentVerifiedAt) {
       await grantAccountSearchCredit({
         req,
         userId: user.id,
@@ -2723,8 +2792,9 @@ async function syncEmailVerificationFromSupabase(
   }
 
   return {
-    email_verified: emailVerified,
-    email_verified_at: verifiedAt,
+    email_verified: true,
+    email_verified_at: authVerifiedAt,
+    synchronization_status: 'confirmed',
   };
 }
 
@@ -2758,6 +2828,10 @@ async function getAccountStatus(req: Request, userId: string) {
   return {
     email_verified: emailState.email_verified,
     email_verified_at: emailState.email_verified_at,
+    email_verification_sync_status: emailState.synchronization_status,
+    session_reissue_required:
+      emailState.email_verified &&
+      (req as AuthRequest).user?.session_scope !== 'full',
     phone_verified: Boolean(user.phone_verified),
     phone_verified_at: user.phone_verified_at || null,
     available_credits: await getActiveSearchCreditsCount(userId),
@@ -5648,7 +5722,7 @@ app.post('/api/auth/register', async (req: Request, res: Response) => {
         type: 'signup',
         email: newUser.email,
         options: {
-          emailRedirectTo: buildPublicUrl('/configuracion'),
+          emailRedirectTo: buildPublicUrl('/correo-pendiente'),
         },
       });
 
@@ -5717,11 +5791,14 @@ app.post('/api/auth/register', async (req: Request, res: Response) => {
       }
     }
 
-    const token = signToken({
-      id: newUser.id,
-      email: newUser.email,
-      tipo_usuario: newUser.tipo_usuario,
-    });
+    const token = signToken(
+      {
+        id: newUser.id,
+        email: newUser.email,
+        tipo_usuario: newUser.tipo_usuario,
+      },
+      'restricted'
+    );
 
     res.status(201).json({
       success: true,
@@ -5737,6 +5814,7 @@ app.post('/api/auth/register', async (req: Request, res: Response) => {
         daily_search_limit: newUser.daily_search_limit,
         email_verified: false,
         email_verified_at: null,
+        session_scope: 'restricted',
         phone_verified: false,
         phone_verified_at: null,
         bonus_credits_available: await getActiveSearchCreditsCount(newUser.id),
@@ -5878,7 +5956,7 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
       email: user.email,
       password: plainPassword,
       nombre: user.nombre,
-      emailVerified: Boolean(user.email_verified_at || user.email_verified || user.email_verificado),
+      emailVerified: Boolean(user.email_verified_at),
     });
 
     if (authUserId && authUserId !== user.auth_user_id) {
@@ -5894,11 +5972,16 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
 
     const accountStatus = await getAccountStatus(req, user.id);
 
-    const token = signToken({
-      id: user.id,
-      email: user.email,
-      tipo_usuario: user.tipo_usuario,
-    });
+    const sessionScope: EmailSessionScope =
+      accountStatus?.email_verified && accountStatus.email_verified_at ? 'full' : 'restricted';
+    const token = signToken(
+      {
+        id: user.id,
+        email: user.email,
+        tipo_usuario: user.tipo_usuario,
+      },
+      sessionScope
+    );
 
     await logAuthenticationAudit({
       user_id: user.id,
@@ -5924,11 +6007,12 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
             : user.tipo_usuario === 'admin'
               ? null
               : 3,
-        email_verified: accountStatus?.email_verified ?? Boolean(user.email_verified_at || user.email_verified || user.email_verificado),
+        email_verified: accountStatus?.email_verified ?? Boolean(user.email_verified_at),
         email_verified_at: accountStatus?.email_verified_at || user.email_verified_at || null,
         phone_verified: accountStatus?.phone_verified ?? Boolean(user.phone_verified),
         phone_verified_at: accountStatus?.phone_verified_at || user.phone_verified_at || null,
         bonus_credits_available: accountStatus?.available_credits ?? await getActiveSearchCreditsCount(user.id),
+        session_scope: sessionScope,
       },
     });
   } catch (error) {
@@ -5980,7 +6064,34 @@ app.get('/api/account/status', authenticateToken, async (req: AuthRequest, res: 
   }
 });
 
-app.post('/api/auth/resend-verification', authenticateToken, async (req: AuthRequest, res: Response) => {
+const resendVerificationLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 3,
+  keyGenerator: (req: AuthRequest) => req.user?.id || req.ip || 'unknown',
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (req: AuthRequest, res: Response) => {
+    void logAccountSecurityEvent(
+      req,
+      'email_verification_resend_rate_limited',
+      req.user?.id || null,
+      {
+        endpoint: '/api/auth/resend-verification',
+      }
+    );
+    res.status(429).json({
+      success: false,
+      code: 'EMAIL_VERIFICATION_RESEND_RATE_LIMITED',
+      message: 'Espera antes de solicitar otro correo de verificacion.',
+    });
+  },
+});
+
+app.post(
+  '/api/auth/resend-verification',
+  authenticateToken,
+  resendVerificationLimiter,
+  async (req: AuthRequest, res: Response) => {
   try {
     if (!req.user?.id) {
       res.status(401).json({ success: false, message: 'Usuario no autenticado' });
@@ -6022,9 +6133,10 @@ app.post('/api/auth/resend-verification', authenticateToken, async (req: AuthReq
       return;
     }
 
-    const authUser = await getSupabaseAuthUserForPublicUser(user);
+    const authLookup = await getSupabaseAuthUserForPublicUser(user);
+    const authUser = authLookup.user;
 
-    if (!authUser) {
+    if (authLookup.status !== 'found' || !authUser) {
       res.status(409).json({
         success: false,
         message: 'No se pudo enlazar la cuenta de autenticacion. Inicia sesion nuevamente e intenta otra vez.',
@@ -6036,7 +6148,7 @@ app.post('/api/auth/resend-verification', authenticateToken, async (req: AuthReq
       type: 'signup',
       email: user.email,
       options: {
-        emailRedirectTo: buildPublicUrl('/configuracion'),
+        emailRedirectTo: buildPublicUrl('/correo-pendiente'),
       },
     });
 
@@ -6063,7 +6175,8 @@ app.post('/api/auth/resend-verification', authenticateToken, async (req: AuthReq
       message: 'No se pudo reenviar el correo de verificacion',
     });
   }
-});
+  }
+);
 
 app.post('/api/auth/password-reset', async (req: Request, res: Response) => {
   if (!(await requireTurnstile(req, res, '/api/auth/password-reset'))) {
@@ -6376,7 +6489,7 @@ app.post('/api/auth/change-password', authenticateToken, async (req: AuthRequest
         email: user.email,
         password: parsed.data.new_password,
         nombre: user.nombre,
-        emailVerified: Boolean(user.email_verified_at || user.email_verified || user.email_verificado),
+        emailVerified: Boolean(user.email_verified_at),
       });
 
     if (authUserId) {
@@ -9254,6 +9367,7 @@ app.get(
       'created',
       'pending',
       'approved',
+      'approved_pending_email_verification',
       'declined',
       'voided',
       'error',
@@ -9642,7 +9756,7 @@ app.post(
 
       const { data: currentUser, error: currentUserError } = await supabase
         .from('users')
-        .select('id, plan_type, daily_search_limit')
+        .select('id, plan_type, daily_search_limit, email_verified_at')
         .eq('id', existingPayment.user_id)
         .maybeSingle();
 
@@ -9654,6 +9768,21 @@ app.post(
         res.status(409).json({
           success: false,
           message: 'El usuario asociado al pago no existe; no se puede activar el plan.',
+        });
+        return;
+      }
+
+      if (!currentUser.email_verified_at?.trim()) {
+        res.status(409).json({
+          success: false,
+          code: 'EMAIL_VERIFICATION_REQUIRED',
+          message:
+            'El pago esta aprobado, pero el plan no puede activarse hasta confirmar el correo.',
+          data: {
+            reconciled: false,
+            payment_id: existingPayment.id,
+            payment_status: 'approved_pending_email_verification',
+          },
         });
         return;
       }

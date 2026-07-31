@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { ArrowLeft, ArrowRight, Building2, CheckCircle2, ShieldCheck, Sparkles } from 'lucide-react';
 import { getToken } from '@/lib/auth';
+import { emailVerificationFetch as fetch } from '@/lib/emailVerification';
 
 declare global {
   interface Window {

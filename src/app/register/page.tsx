@@ -18,6 +18,8 @@ type RegisterResponse = {
     fullName?: string;
     email: string;
     tipo_usuario?: string;
+    email_verified?: boolean;
+    session_scope?: "restricted" | "full";
   };
 };
 
@@ -287,7 +289,7 @@ export default function RegisterPage() {
       setSuccess("Cuenta creada correctamente");
 
       setTimeout(() => {
-        router.push("/");
+        router.push("/correo-pendiente");
       }, 1000);
     } catch (err) {
       const message =

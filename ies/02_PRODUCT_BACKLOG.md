@@ -153,6 +153,9 @@ Este archivo es el backlog profesional del proyecto InmoScore. Organiza epicas, 
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | BUG-001 | Reset password no validado en produccion | DONE | CRITICAL | EPIC-001 | Supabase redirects, Resend, Turnstile | InmoScore Engineering Team | SPR-004 | Password nueva aceptada, anterior rechazada, sesion normal rechazada y enlace reutilizado rechazado en produccion. | Validacion productiva exitosa; bug cerrado el 2026-07-24. |
 | BUG-002 | Backend Railway con trial expirado bloquea entorno productivo | BLOCKED | CRITICAL | EPIC-008 | Railway o alternativa | InmoScore Engineering Team | SPR-004 | Backend productivo restaurado o reemplazo decidido. | Bloqueante actual de despliegue. |
+| BUG-003 | Cuentas con correo no confirmado reciben sesion completa y pueden ejecutar operaciones sensibles | REVIEW | HIGH | EPIC-001 | Supabase Auth, backend, frontend, Resend | InmoScore Engineering Team | SPR-004 | Cuenta pendiente conserva acceso limitado; backend bloquea operaciones sensibles; confirmacion exige nueva sesion; pagos aprobados no activan plan antes de confirmar. | Implementacion local y pruebas completas; pendiente validacion production-like. |
+| BUG-004 | GET /api/tenants/:cedula puede evitar el control de consumo de busquedas | BACKLOG | HIGH | EPIC-002 | FEAT-005 a FEAT-007 | InmoScore Engineering Team | TBD | Detalle aplica permisos, consumo, idempotencia y auditoria equivalentes a busqueda. | Registrado independientemente; fuera de BUG-003. |
+| BUG-005 | POST /api/auth/change-password acepta current_password opcional | BACKLOG | HIGH | EPIC-001 | Auth backend, recovery | InmoScore Engineering Team | TBD | Cambio directo exige credencial actual; recovery mediante enlace permanece separado. | Registrado independientemente; fuera de BUG-003. |
 
 ## 7. Tech debt
 
@@ -186,3 +189,4 @@ Este archivo es el backlog profesional del proyecto InmoScore. Organiza epicas, 
 | 2026-07-22 | FEAT-003 y STORY-001 pasan a REVIEW tras 19 pruebas y builds locales exitosos; BUG-001 y TASK-001 permanecen BLOCKED hasta validacion productiva. | InmoScore Engineering Team |
 | 2026-07-24 | TASK-001, TASK-006 y BUG-001 pasan a DONE tras validacion productiva; FEAT-003 y STORY-001 conservan REVIEW hasta cerrar evidencia de auditoria. | InmoScore Engineering Team |
 | 2026-07-28 | FEAT-003 y STORY-001 pasan a DONE con evidencia persistida `password.reset.success`; EPIC-010 y TASK-020 a TASK-023 absorben el refactor no bloqueante de auditoria. | InmoScore Engineering Team |
+| 2026-07-30 | BUG-003 queda implementado localmente en REVIEW; BUG-004 y BUG-005 se registran como hallazgos independientes en BACKLOG. | InmoScore Engineering Team |

@@ -54,6 +54,7 @@ Preparar la base productiva de InmoScore para una release beta controlada, dejan
 | STORY-008 | STORY | Como equipo de QA quiero probar registro, login, reset password, busqueda, reporte e historial | CRITICAL | READY |
 | STORY-009 | STORY | Como equipo de auditoria quiero validar auditorias search, legal report y authentication | CRITICAL | READY |
 | STORY-010 | STORY | Como equipo de ingenieria quiero revisar logs temporales antes del despliegue | HIGH | READY |
+| BUG-003 | BUG | Cuentas con correo no confirmado reciben sesion completa y pueden ejecutar operaciones sensibles | HIGH | REVIEW |
 
 ## 4. Historias incluidas
 
@@ -121,6 +122,7 @@ Excepcion de alcance autorizada el 2026-07-22: correccion minima de reset passwo
 - STORY-009 queda completada con auditorias search, legal report y authentication verificadas.
 - STORY-010 queda completada sin secretos ni PII innecesaria en logs temporales.
 - Todos los bloqueantes `CRITICAL` del sprint quedan resueltos o documentados con decision formal.
+- BUG-003 queda validado con sesion restringida, bloqueo backend directo, reenvio, recovery, renovacion de sesion y pago Wompi diferido.
 
 ## 10. Plan de pruebas
 
@@ -137,6 +139,7 @@ Excepcion de alcance autorizada el 2026-07-22: correccion minima de reset passwo
 | TASK-017 | Probar historial | Historial se crea o consulta segun flujo disponible. |
 | TASK-018 | Revisar authentication audit | Eventos de auth esperados quedan registrados. |
 | TASK-019 | Revisar logs temporales | No hay secretos, tokens, passwords ni PII innecesaria. |
+| BUG-003 | Validar correo pendiente | Sesion restringida conserva solo allowlist exacta; operaciones sensibles fallan por backend; nuevo login habilita despues de sincronizar. |
 
 ### Evidencia local 2026-07-22
 

@@ -18,6 +18,8 @@ type LoginResponse = {
     fullName?: string;
     email: string;
     tipo_usuario?: string;
+    email_verified?: boolean;
+    session_scope?: "restricted" | "full";
   };
 };
 
@@ -178,7 +180,9 @@ function LoginPageContent() {
 
       setSession(data.token, data.user);
 
-      router.replace(redirectTo);
+      const hasFullSession =
+        data.user.email_verified === true && data.user.session_scope === "full";
+      router.replace(hasFullSession ? redirectTo : "/correo-pendiente");
     } catch (err) {
       const message =
         err instanceof Error ? err.message : "Error al conectar con el servidor";

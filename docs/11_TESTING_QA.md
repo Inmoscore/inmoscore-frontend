@@ -20,6 +20,11 @@
 - Login con password incorrecto no filtra informacion sensible.
 - Login con Turnstile invalido falla.
 - Resend verification funciona.
+- Cuenta con correo no confirmado recibe solo sesion restringida.
+- Operaciones sensibles responden `403 EMAIL_VERIFICATION_REQUIRED` para sesion restringida.
+- Confirmacion sincroniza `users.email_verified_at` y exige un nuevo login.
+- Reenvio permanece disponible con rate limiting y auditoria.
+- Pantalla de correo pendiente pausa polling cuando la pestana no esta visible.
 - Reset password envia email.
 - Link de reset redirige correctamente en produccion.
 - Cambio de password funciona.
@@ -96,6 +101,8 @@
 
 - Webhook Wompi procesa evento valido.
 - Webhook duplicado no duplica beneficio.
+- Pago Wompi aprobado para correo pendiente queda en `approved_pending_email_verification` sin activar plan.
+- Reconciliacion posterior exige correo confirmado y MFA administrativo.
 - Verificacion/reconciliacion admin funciona.
 - Upgrade event queda registrado.
 

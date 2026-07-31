@@ -10,6 +10,7 @@ import { MetricCard as SystemMetricCard } from "@/components/ui/MetricCard";
 import { PageContainer } from "@/components/ui/PageContainer";
 import { SectionHeader } from "@/components/ui/SectionHeader";
 import { StatusBadge as SystemStatusBadge, type StatusTone } from "@/components/ui/StatusBadge";
+import { emailVerificationFetch as fetch } from "@/lib/emailVerification";
 
 type AdminReporterUser = {
   id: string;
@@ -1028,6 +1029,7 @@ const WOMPI_PAYMENT_STATUSES = [
   "created",
   "pending",
   "approved",
+  "approved_pending_email_verification",
   "declined",
   "failed",
   "error",
@@ -1277,6 +1279,7 @@ const DISPUTE_STATUS_STYLES: Record<LegalSignalDisputeStatus, string> = {
 
 const WOMPI_PAYMENT_STATUS_STYLES: Record<string, string> = {
   approved: "bg-green-100 text-green-800 border-green-200",
+  approved_pending_email_verification: "bg-amber-100 text-amber-900 border-amber-300",
   pending: "bg-amber-100 text-amber-800 border-amber-200",
   created: "bg-amber-100 text-amber-800 border-amber-200",
   declined: "bg-red-100 text-red-800 border-red-200",
@@ -1788,16 +1791,22 @@ function DisputeStatusBadge({ status }: { status: LegalSignalDisputeStatus }) {
 
 function WompiPaymentStatusBadge({ status }: { status: string | null }) {
   const normalized = (status || "unknown").toLowerCase();
+  const label =
+    normalized === "approved_pending_email_verification"
+      ? "Aprobado · correo pendiente"
+      : normalized;
   const tone: StatusTone =
     normalized === "approved"
       ? "success"
       : normalized === "declined" || normalized === "failed" || normalized === "error"
         ? "error"
-        : normalized === "pending" || normalized === "created"
+        : normalized === "pending" ||
+            normalized === "created" ||
+            normalized === "approved_pending_email_verification"
           ? "pending"
           : "neutral";
 
-  return <SystemStatusBadge tone={tone}>{normalized}</SystemStatusBadge>;
+  return <SystemStatusBadge tone={tone}>{label}</SystemStatusBadge>;
 }
 
 function RentalHistoryStatusBadge({ status }: { status: RentalHistoryStatus }) {
@@ -3053,7 +3062,10 @@ export default function AdminPage() {
     {
       label: "Pagos pendientes",
       value: wompiPayments.filter(
-        (item) => item.internal_status === "pending" || item.wompi_status === "PENDING"
+        (item) =>
+          item.internal_status === "pending" ||
+          item.internal_status === "approved_pending_email_verification" ||
+          item.wompi_status === "PENDING"
       ).length,
       target: "payments" as AdminTab,
       tone: "violet",
@@ -3121,7 +3133,12 @@ export default function AdminPage() {
     },
     {
       label: "Conciliar pagos",
-      count: wompiPayments.filter((item) => item.internal_status === "pending" || item.wompi_status === "PENDING").length,
+      count: wompiPayments.filter(
+        (item) =>
+          item.internal_status === "pending" ||
+          item.internal_status === "approved_pending_email_verification" ||
+          item.wompi_status === "PENDING"
+      ).length,
       owner: "Billing",
       tone: "pending",
       target: "payments",

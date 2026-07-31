@@ -1,5 +1,7 @@
 "use client";
 
+import { emailVerificationFetch as fetch } from "@/lib/emailVerification";
+
 export type SecureDocumentCategory =
   | "identity_document"
   | "report_evidence"

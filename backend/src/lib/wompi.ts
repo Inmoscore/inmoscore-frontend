@@ -6,6 +6,7 @@ export type WompiPaymentStatus =
   | 'created'
   | 'pending'
   | 'approved'
+  | 'approved_pending_email_verification'
   | 'declined'
   | 'voided'
   | 'error'

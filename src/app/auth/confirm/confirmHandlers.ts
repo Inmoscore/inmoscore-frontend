@@ -11,7 +11,10 @@ import {
   requireRecoveryFlowSecret,
   sealPendingRecovery,
 } from "../../../lib/recoveryCookies.server.ts";
-import { parseAuthConfirmQuery } from "../../../lib/recoveryRedirect.ts";
+import {
+  parseAuthConfirmQuery,
+  parseEmailConfirmationQuery,
+} from "../../../lib/recoveryRedirect.ts";
 import {
   createSupabaseServerClient,
   getSupabaseConfiguration,
@@ -25,6 +28,11 @@ type VerifyOtpResult = {
 type VerifyRecoveryOtp = (params: {
   token_hash: string;
   type: "recovery";
+}) => Promise<VerifyOtpResult>;
+
+type VerifyEmailOtp = (params: {
+  token_hash: string;
+  type: "signup";
 }) => Promise<VerifyOtpResult>;
 
 const secureCookies = process.env.NODE_ENV === "production";
@@ -160,6 +168,51 @@ export function createRecoveryFailureResponse(
   return response;
 }
 
+async function handleEmailConfirmationGet(
+  request: NextRequest,
+  verifyOtpOverride?: VerifyEmailOtp
+): Promise<NextResponse | null> {
+  const parsed = parseEmailConfirmationQuery(request.nextUrl.searchParams);
+  if (parsed.kind === "not_email_confirmation") return null;
+  if (parsed.kind === "invalid") {
+    return redirect(request, "/correo-pendiente?error=invalid_link");
+  }
+
+  const response = redirect(request, "/correo-pendiente?confirmed=true");
+
+  try {
+    let verifyOtp = verifyOtpOverride;
+    if (!verifyOtp) {
+      const configuration = getSupabaseConfiguration();
+      const supabase = createSupabaseServerClient(
+        {
+          getAll: () => request.cookies.getAll(),
+          setAll: (cookies) => {
+            cookies.forEach(({ name, value, options }) => {
+              response.cookies.set(name, value, options);
+            });
+          },
+        },
+        configuration
+      );
+      verifyOtp = (params) => supabase.auth.verifyOtp(params);
+    }
+
+    const { data, error } = await verifyOtp({
+      token_hash: parsed.value.tokenHash,
+      type: "signup",
+    });
+
+    if (error || !data?.user?.id) {
+      return redirect(request, "/correo-pendiente?error=invalid_link");
+    }
+
+    return response;
+  } catch {
+    return redirect(request, "/correo-pendiente?error=invalid_link");
+  }
+}
+
 export function renderConfirmHtml(hasPendingRecovery: boolean): string {
   const content = hasPendingRecovery
     ? `<p>Confirma que deseas continuar con el cambio de contraseña.</p>
@@ -196,7 +249,16 @@ export function renderConfirmHtml(hasPendingRecovery: boolean): string {
 </html>`;
 }
 
-export async function handleConfirmGet(request: NextRequest): Promise<NextResponse> {
+export async function handleConfirmGet(
+  request: NextRequest,
+  verifyEmailOtpOverride?: VerifyEmailOtp
+): Promise<NextResponse> {
+  const emailConfirmationResponse = await handleEmailConfirmationGet(
+    request,
+    verifyEmailOtpOverride
+  );
+  if (emailConfirmationResponse) return emailConfirmationResponse;
+
   const parsed = parseAuthConfirmQuery(request.nextUrl.searchParams);
 
   if (parsed.kind === "invalid") {

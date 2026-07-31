@@ -24,6 +24,7 @@ import { AppCard } from "@/components/ui/AppCard";
 import { PageContainer } from "@/components/ui/PageContainer";
 import { SectionHeader } from "@/components/ui/SectionHeader";
 import { StatusBadge, type StatusTone } from "@/components/ui/StatusBadge";
+import { emailVerificationFetch as fetch } from "@/lib/emailVerification";
 import { VerificationRequiredCard } from "@/components/identity/VerificationRequiredCard";
 import {
   IDENTITY_VERIFICATION_REQUIRED_CODE,

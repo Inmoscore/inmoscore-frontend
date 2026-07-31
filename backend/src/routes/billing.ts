@@ -8,6 +8,7 @@ import {
   getStripeClient,
   isStripeConfigured,
 } from '../lib/stripe';
+import { getPlanActivationDecision } from '../lib/emailVerificationPolicy';
 
 type AuthenticatedRequest = Request & {
   user?: {
@@ -142,6 +143,20 @@ async function applyPaidPlan(params: {
   customerId?: string | null;
   subscriptionId?: string | null;
 }): Promise<void> {
+  const { data: user, error: userError } = await supabase
+    .from('users')
+    .select('id, email_verified_at')
+    .eq('id', params.userId)
+    .maybeSingle();
+
+  if (userError) {
+    throw userError;
+  }
+
+  if (getPlanActivationDecision(user?.email_verified_at) === 'defer_email_verification') {
+    throw new Error('EMAIL_VERIFICATION_REQUIRED_FOR_PLAN_ACTIVATION');
+  }
+
   const planConfig = getPlanConfig(params.planType);
 
   await updateUserPlan(params.userId, {

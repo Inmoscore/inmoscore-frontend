@@ -22,10 +22,12 @@ import { MetricCard } from "@/components/ui/MetricCard";
 import { PageContainer } from "@/components/ui/PageContainer";
 import { SectionHeader } from "@/components/ui/SectionHeader";
 import { StatusBadge } from "@/components/ui/StatusBadge";
+import { emailVerificationFetch as fetch } from "@/lib/emailVerification";
 
 type AccountStatus = {
   email_verified: boolean;
   email_verified_at: string | null;
+  session_reissue_required?: boolean;
   phone_verified: boolean;
   phone_verified_at: string | null;
   available_credits: number;
@@ -76,6 +78,11 @@ export default function ConfiguracionPage() {
 
       if (!response.ok || !data.success) {
         throw new Error(data.message || "No se pudo cargar el estado de cuenta");
+      }
+
+      if (!data.account.email_verified || data.account.session_reissue_required) {
+        router.replace("/correo-pendiente");
+        return;
       }
 
       setAccount(data.account);

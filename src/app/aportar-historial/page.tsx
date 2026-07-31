@@ -7,6 +7,7 @@ import { PlatformShell } from '@/components/platform/PlatformShell';
 import { ActionBanner } from '@/components/ui/ActionBanner';
 import { WorkflowStepper } from '@/components/workflows/WorkflowStepper';
 import { VerificationRequiredCard } from '@/components/identity/VerificationRequiredCard';
+import { emailVerificationFetch as fetch } from '@/lib/emailVerification';
 import {
   IDENTITY_VERIFICATION_REQUIRED_CODE,
   IDENTITY_VERIFICATION_REQUIRED_MESSAGE,

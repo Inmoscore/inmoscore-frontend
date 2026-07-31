@@ -1,5 +1,6 @@
 "use client";
 
+import { emailVerificationFetch as fetch } from "@/lib/emailVerification";
 import Link from "next/link";
 import { FormEvent, useEffect, useState } from "react";
 import { BadgeCheck, FileCheck2, Fingerprint, ShieldCheck, UserCheck } from "lucide-react";

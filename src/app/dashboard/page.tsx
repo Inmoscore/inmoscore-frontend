@@ -93,14 +93,6 @@ export default function DashboardPage() {
       return;
     }
 
-    fetchCurrentIdentityUser(process.env.NEXT_PUBLIC_API_URL)
-      .then((identityUser) => {
-        if (identityUser) setUser((current) => ({ ...(current || {}), ...identityUser }));
-      })
-      .catch(() => {
-        // Keep the dashboard usable from the stored session when the status refresh fails.
-      });
-
     const token = getToken();
     const apiUrl = process.env.NEXT_PUBLIC_API_URL;
     if (token && apiUrl) {
@@ -110,6 +102,11 @@ export default function DashboardPage() {
         .then((response) => response.json())
         .then((data) => {
           if (data?.success && data.account) {
+            if (data.account.session_reissue_required) {
+              router.replace("/correo-pendiente");
+              return;
+            }
+
             setUser((current) => ({
               ...(current || {}),
               email_verified: data.account.email_verified,
@@ -118,6 +115,18 @@ export default function DashboardPage() {
               phone_verified_at: data.account.phone_verified_at,
               bonus_credits_available: data.account.available_credits,
             }));
+
+            if (data.account.email_verified) {
+              void fetchCurrentIdentityUser(apiUrl)
+                .then((identityUser) => {
+                  if (identityUser) {
+                    setUser((current) => ({ ...(current || {}), ...identityUser }));
+                  }
+                })
+                .catch(() => {
+                  // Keep the dashboard usable from the stored session when identity refresh fails.
+                });
+            }
           }
         })
         .catch(() => {

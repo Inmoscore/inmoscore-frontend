@@ -9,7 +9,10 @@ import {
   sealPendingRecovery,
   verifyRecoveryGrant,
 } from "./recoveryCookies.server.ts";
-import { parseAuthConfirmQuery } from "./recoveryRedirect.ts";
+import {
+  parseAuthConfirmQuery,
+  parseEmailConfirmationQuery,
+} from "./recoveryRedirect.ts";
 
 const secret = "test-only-recovery-secret-with-at-least-32-characters";
 
@@ -56,6 +59,39 @@ test("rejects unknown, duplicate or missing parameters and incorrect type", () =
   for (const value of cases) {
     assert.equal(parseAuthConfirmQuery(new URLSearchParams(value)).kind, "invalid");
   }
+});
+
+test("allows only signup confirmation to return to the pending email screen", () => {
+  assert.equal(
+    parseEmailConfirmationQuery(
+      new URLSearchParams({
+        token_hash: "token",
+        type: "signup",
+        next: "/correo-pendiente",
+      })
+    ).kind,
+    "valid"
+  );
+  assert.equal(
+    parseEmailConfirmationQuery(
+      new URLSearchParams({
+        token_hash: "token",
+        type: "signup",
+        next: "/dashboard",
+      })
+    ).kind,
+    "invalid"
+  );
+  assert.equal(
+    parseEmailConfirmationQuery(
+      new URLSearchParams({
+        token_hash: "token",
+        type: "recovery",
+        next: "/reset-password",
+      })
+    ).kind,
+    "not_email_confirmation"
+  );
 });
 
 test("pending recovery cookie is encrypted, authenticated and expires quickly", () => {

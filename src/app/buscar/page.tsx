@@ -14,6 +14,7 @@ import { MetricCard } from '@/components/ui/MetricCard';
 import { PageContainer } from '@/components/ui/PageContainer';
 import { SectionHeader } from '@/components/ui/SectionHeader';
 import { StatusBadge, type StatusTone } from '@/components/ui/StatusBadge';
+import { emailVerificationFetch as fetch } from '@/lib/emailVerification';
 
 type ScoreFactor = {
   type: string;
