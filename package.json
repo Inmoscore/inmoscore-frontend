@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "node --test src/lib/recoveryFlow.test.ts src/lib/emailVerification.test.ts src/app/auth/confirm/route.test.ts src/app/reset-password/postSuccess.test.ts"
+    "test": "node --test src/lib/recoveryFlow.test.ts src/lib/emailVerification.test.ts src/app/auth/confirm/route.test.ts src/app/reset-password/postSuccess.test.ts src/app/admin/identityVerificationAction.test.ts"
   },
   "dependencies": {
     "@supabase/ssr": "0.6.1",

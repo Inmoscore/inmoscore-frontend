@@ -11,6 +11,11 @@ import { PageContainer } from "@/components/ui/PageContainer";
 import { SectionHeader } from "@/components/ui/SectionHeader";
 import { StatusBadge as SystemStatusBadge, type StatusTone } from "@/components/ui/StatusBadge";
 import { emailVerificationFetch as fetch } from "@/lib/emailVerification";
+import {
+  IdentityVerificationActionController,
+  type IdentityVerificationPatchResult,
+  type PendingIdentityVerificationAction,
+} from "./identityVerificationAction";
 
 type AdminReporterUser = {
   id: string;
@@ -1865,9 +1870,11 @@ function LoadingSkeleton({ count = 2 }: { count?: number }) {
 function ErrorAlert({
   message,
   onRetry,
+  retryLabel = "Reintentar",
 }: {
   message: string;
   onRetry?: () => void;
+  retryLabel?: string;
 }) {
   return (
     <div className="mb-4 flex items-start justify-between gap-3 rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-700">
@@ -1880,7 +1887,7 @@ function ErrorAlert({
           onClick={onRetry}
           className="shrink-0 rounded border border-red-300 bg-white px-3 py-1 text-xs font-medium text-red-700 hover:bg-red-100"
         >
-          Reintentar
+          {retryLabel}
         </button>
       )}
     </div>
@@ -2902,6 +2909,7 @@ export default function AdminPage() {
   const [rentalHistoriesError, setRentalHistoriesError] = useState<string | null>(null);
   const [rentalHistoriesNotice, setRentalHistoriesNotice] = useState<string | null>(null);
   const [identityVerificationsError, setIdentityVerificationsError] = useState<string | null>(null);
+  const [identityVerificationsNotice, setIdentityVerificationsNotice] = useState<string | null>(null);
   const [signalsError, setSignalsError] = useState<string | null>(null);
   const [usersError, setUsersError] = useState<string | null>(null);
   const [planLogsError, setPlanLogsError] = useState<string | null>(null);
@@ -2936,6 +2944,12 @@ export default function AdminPage() {
   const [mfaDisableCode, setMfaDisableCode] = useState("");
   const [mfaBackupCodes, setMfaBackupCodes] = useState<string[]>([]);
   const [mfaBusy, setMfaBusy] = useState(false);
+  const [pendingIdentityAction, setPendingIdentityAction] =
+    useState<PendingIdentityVerificationAction | null>(null);
+  const identityActionControllerRef = useRef<IdentityVerificationActionController | null>(null);
+  if (!identityActionControllerRef.current) {
+    identityActionControllerRef.current = new IdentityVerificationActionController();
+  }
   const initialAdminLoadTokenRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -3983,6 +3997,16 @@ export default function AdminPage() {
     loadAuditLogs,
   ]);
 
+  const synchronizeIdentityVerificationData = useCallback(async () => {
+    await Promise.allSettled([
+      loadIdentityVerifications(),
+      loadMetrics(),
+      loadActions(),
+      loadAuditLogs(),
+      loadUsers(),
+    ]);
+  }, [loadIdentityVerifications, loadMetrics, loadActions, loadAuditLogs, loadUsers]);
+
 
   const filteredReports = useMemo(() => {
     const searchValue = normalizeText(search);
@@ -4358,6 +4382,7 @@ export default function AdminPage() {
   const updateIdentityVerification = useCallback(
     async (documentId: string, action: "approve" | "reject") => {
       if (!token || !API_URL) return;
+      if (identityActionControllerRef.current?.getPending()) return;
 
       const notes = window.prompt(
         action === "approve"
@@ -4372,50 +4397,140 @@ export default function AdminPage() {
         return;
       }
 
-      try {
-        setIdentityVerificationsError(null);
+      setIdentityVerificationsError(null);
+      setIdentityVerificationsNotice(null);
 
-        const response = await fetch(`${API_URL}/api/admin/identity-verifications/documents/${documentId}`, {
-          method: "PATCH",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
+      const payload = {
+        action,
+        notes: notes.trim() || undefined,
+      };
+      const controller = identityActionControllerRef.current;
+      if (!controller) return;
+
+      const result = await controller.execute(
+        { operation: action, documentId, payload },
+        {
+          patch: async (pending): Promise<IdentityVerificationPatchResult> => {
+            const response = await fetch(
+              `${API_URL}/api/admin/identity-verifications/documents/${pending.documentId}`,
+              {
+                method: "PATCH",
+                headers: {
+                  "Content-Type": "application/json",
+                  Authorization: `Bearer ${token}`,
+                },
+                body: JSON.stringify(pending.payload),
+              }
+            );
+
+            if (response.status === 403) {
+              const mfaPayload: MfaRequiredResponse = await response
+                .clone()
+                .json()
+                .catch(() => ({}));
+              if (mfaPayload.code === "MFA_REQUIRED") {
+                return { type: "mfa_required" };
+              }
+            }
+
+            if (response.status === 409) {
+              return { type: "conflict" };
+            }
+
+            if (response.status === 401 || response.status === 403) {
+              logout("/login");
+              return { type: "error", message: "Sesión administrativa no autorizada." };
+            }
+
+            const data: IdentityVerificationUpdateResponse = await response
+              .json()
+              .catch(() => ({ success: false }));
+
+            if (!response.ok || !data.success || !data.verification) {
+              return {
+                type: "error",
+                message: data.message || "No se pudo actualizar la verificación",
+              };
+            }
+
+            return { type: "success" };
           },
-          body: JSON.stringify({
-            action,
-            notes: notes.trim() || undefined,
-          }),
-        });
+          challenge: async () => {
+            const code = window.prompt(
+              "Esta acción requiere MFA reciente. Ingresa un código TOTP o backup code:"
+            );
 
-        if (response.status === 403 && (await handleMfaRequiredResponse(response, setIdentityVerificationsError))) {
-          return;
+            if (!code?.trim()) {
+              return {
+                success: false as const,
+                message: "MFA requerido para completar esta acción.",
+              };
+            }
+
+            setMfaBusy(true);
+            try {
+              const isBackupCode = /[A-Za-z-]/.test(code);
+              const challengeResponse = await postAdminMfa("/api/admin/mfa/challenge", {
+                [isBackupCode ? "backup_code" : "token"]: code.trim(),
+              });
+              const challengeData: AdminMfaVerifyResponse = await challengeResponse
+                .json()
+                .catch(() => ({ success: false }));
+
+              if (!challengeResponse.ok || !challengeData.success) {
+                return {
+                  success: false as const,
+                  message: challengeData.message || "Código MFA inválido.",
+                };
+              }
+
+              await loadMfaStatus();
+              return { success: true as const };
+            } finally {
+              setMfaBusy(false);
+            }
+          },
+          synchronize: synchronizeIdentityVerificationData,
+          onPendingChange: setPendingIdentityAction,
+          onMfaVerified: () => {
+            setIdentityVerificationsNotice("MFA verificado. Completando operación…");
+          },
+          onMutationSettled: (settledDocumentId) => {
+            setIdentityVerifications((current) =>
+              current.filter((item) => item.secure_document_id !== settledDocumentId)
+            );
+          },
         }
+      );
 
-        if (response.status === 401 || response.status === 403) {
-          logout("/login");
-          return;
-        }
-
-        const data: IdentityVerificationUpdateResponse = await response.json();
-
-        if (!response.ok || !data.success || !data.verification) {
-          throw new Error(data.message || "No se pudo actualizar la verificación");
-        }
-
-        setIdentityVerifications((current) =>
-          current.map((item) =>
-            item.secure_document_id === documentId
-              ? data.verification as IdentityVerificationItem
-              : item
-          )
+      if (result.status === "success") {
+        setIdentityVerificationsNotice(
+          result.operation === "approve"
+            ? "Documento aprobado correctamente."
+            : "Documento rechazado correctamente."
         );
-      } catch (err) {
+      } else if (result.status === "conflict") {
+        setIdentityVerificationsNotice(
+          "El registro ya fue procesado. Los datos fueron actualizados."
+        );
+      } else if (result.status === "challenge_failed" || result.status === "error") {
+        setIdentityVerificationsNotice(null);
+        setIdentityVerificationsError(result.message);
+      } else if (result.status === "repeated_mfa_required") {
+        setIdentityVerificationsNotice(null);
         setIdentityVerificationsError(
-          err instanceof Error ? err.message : "Error actualizando verificación"
+          "No fue posible completar la operación después de verificar MFA. Inténtalo nuevamente desde la solicitud."
         );
       }
     },
-    [API_URL, token, logout, handleMfaRequiredResponse]
+    [
+      API_URL,
+      token,
+      logout,
+      postAdminMfa,
+      loadMfaStatus,
+      synchronizeIdentityVerificationData,
+    ]
   );
 
   const openIdentityDocument = useCallback(
@@ -8093,7 +8208,17 @@ export default function AdminPage() {
           </div>
 
           {identityVerificationsError && (
-            <ErrorAlert message={identityVerificationsError} onRetry={loadIdentityVerifications} />
+            <ErrorAlert
+              message={identityVerificationsError}
+              onRetry={loadIdentityVerifications}
+              retryLabel="Recargar solicitudes"
+            />
+          )}
+
+          {identityVerificationsNotice && (
+            <div className="mb-4 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+              {identityVerificationsNotice}
+            </div>
           )}
 
           {identityVerificationsLoadingState === "loading" ? (
@@ -8166,7 +8291,9 @@ export default function AdminPage() {
                         <button
                           type="button"
                           onClick={() => updateIdentityVerification(item.secure_document_id, "approve")}
-                          disabled={item.verification_status !== "pending"}
+                          disabled={
+                            item.verification_status !== "pending" || pendingIdentityAction !== null
+                          }
                           className="rounded-md bg-green-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:bg-gray-300"
                         >
                           Aprobar
@@ -8174,7 +8301,9 @@ export default function AdminPage() {
                         <button
                           type="button"
                           onClick={() => updateIdentityVerification(item.secure_document_id, "reject")}
-                          disabled={item.verification_status !== "pending"}
+                          disabled={
+                            item.verification_status !== "pending" || pendingIdentityAction !== null
+                          }
                           className="rounded-md bg-red-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:bg-gray-300"
                         >
                           Rechazar
