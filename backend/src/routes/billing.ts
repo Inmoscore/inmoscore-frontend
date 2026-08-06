@@ -9,6 +9,10 @@ import {
   isStripeConfigured,
 } from '../lib/stripe';
 import { getPlanActivationDecision } from '../lib/emailVerificationPolicy';
+import {
+  buildOperationalLogEntry,
+  writeOperationalLog,
+} from '../lib/adminOperationalSafety';
 
 type AuthenticatedRequest = Request & {
   user?: {
@@ -242,7 +246,16 @@ billingRouter.post('/create-checkout-session', async (req: AuthenticatedRequest,
       },
     });
   } catch (error) {
-    console.error('[billing] Error creando Checkout Session:', error);
+    writeOperationalLog(
+      'error',
+      '[STRIPE_CHECKOUT_ERROR]',
+      buildOperationalLogEntry({
+        category: 'checkout_create_failed',
+        operation: 'create',
+        endpointKey: 'stripe.checkout',
+        error,
+      })
+    );
     res.status(500).json({
       success: false,
       message: 'No se pudo iniciar el pago',
@@ -328,7 +341,16 @@ export async function stripeWebhookHandler(req: Request, res: Response): Promise
     const stripe = getStripeClient();
     event = stripe.webhooks.constructEvent(req.body, signature, webhookSecret) as StripeEventObject;
   } catch (error) {
-    console.warn('[stripe_webhook] Firma invalida:', error);
+    writeOperationalLog(
+      'warn',
+      '[STRIPE_WEBHOOK_WARNING]',
+      buildOperationalLogEntry({
+        category: 'invalid_signature',
+        operation: 'verify',
+        endpointKey: 'stripe.webhook',
+        error,
+      })
+    );
     res.status(400).json({ received: false });
     return;
   }
@@ -358,7 +380,16 @@ export async function stripeWebhookHandler(req: Request, res: Response): Promise
 
     markEventProcessed(event.id);
   } catch (error) {
-    console.error('[stripe_webhook] Error procesando evento:', error);
+    writeOperationalLog(
+      'error',
+      '[STRIPE_WEBHOOK_ERROR]',
+      buildOperationalLogEntry({
+        category: 'webhook_processing_failed',
+        operation: 'process',
+        endpointKey: 'stripe.webhook',
+        error,
+      })
+    );
   }
 
   res.json({ received: true });

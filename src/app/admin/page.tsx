@@ -12,6 +12,12 @@ import { SectionHeader } from "@/components/ui/SectionHeader";
 import { StatusBadge as SystemStatusBadge, type StatusTone } from "@/components/ui/StatusBadge";
 import { emailVerificationFetch as fetch } from "@/lib/emailVerification";
 import {
+  ADMIN_MODULE_UNAVAILABLE_MESSAGE,
+  classifyAdminResponse,
+  countActionableAdminAlerts,
+  formatNullableAdminMetric,
+} from "@/lib/adminOperational";
+import {
   IdentityVerificationActionController,
   type IdentityVerificationPatchResult,
   type PendingIdentityVerificationAction,
@@ -864,29 +870,31 @@ type UpdateUserPlanResponse = {
 };
 
 type AdminMetrics = {
-  searches_today: number;
-  searches_7d: number;
-  unique_search_users_7d: number;
-  upgrade_clicks_7d: number;
-  basic_clicks_7d: number;
-  pro_clicks_7d: number;
-  enterprise_clicks_7d: number;
-  payments_created_7d: number;
-  payments_pending_7d: number;
-  payments_approved_7d: number;
-  payments_failed_7d: number;
-  users_free: number;
-  users_basic: number;
-  users_pro: number;
-  users_admin: number;
-  identity_verifications_pending: number;
-  conversion_search_to_upgrade_7d: number;
-  conversion_upgrade_to_plan_click_7d: number;
-  payment_approval_rate_7d: number;
+  searches_today: number | null;
+  searches_7d: number | null;
+  unique_search_users_7d: number | null;
+  upgrade_clicks_7d: number | null;
+  basic_clicks_7d: number | null;
+  pro_clicks_7d: number | null;
+  enterprise_clicks_7d: number | null;
+  payments_created_7d: number | null;
+  payments_pending_7d: number | null;
+  payments_approved_7d: number | null;
+  payments_failed_7d: number | null;
+  users_free: number | null;
+  users_basic: number | null;
+  users_pro: number | null;
+  users_admin: number | null;
+  identity_verifications_pending: number | null;
+  reports_pending: number | null;
+  conversion_search_to_upgrade_7d: number | null;
+  conversion_upgrade_to_plan_click_7d: number | null;
+  payment_approval_rate_7d: number | null;
 };
 
 type AdminMetricsResponse = {
   success: boolean;
+  partial: boolean;
   metrics: AdminMetrics;
   message?: string;
 };
@@ -938,11 +946,11 @@ type MfaRequiredResponse = {
   message?: string;
 };
 
-type LoadingState = "idle" | "loading" | "success" | "error";
+type LoadingState = "idle" | "loading" | "success" | "degraded" | "error";
 
 type MetricsState =
   | { status: "idle" | "loading" }
-  | { status: "success"; data: AdminMetrics }
+  | { status: "success"; data: AdminMetrics; partial: boolean }
   | { status: "forbidden" }
   | { status: "error"; message?: string };
 
@@ -1345,12 +1353,12 @@ function formatIdentityMetadata(metadata: Record<string, unknown> | undefined): 
   return entries.length > 0 ? entries.join(" · ") : "Sin metadata";
 }
 
-function formatMetricNumber(value: number): string {
-  return value.toLocaleString("es-CO");
+function formatMetricNumber(value: number | null): string {
+  return formatNullableAdminMetric(value);
 }
 
-function formatMetricPercentage(value: number): string {
-  return `${value.toFixed(2)}%`;
+function formatMetricPercentage(value: number | null): string {
+  return value === null ? "No disponible" : `${value.toFixed(2)}%`;
 }
 
 function formatCOP(amountInCents: number, currency: string): string {
@@ -1923,6 +1931,24 @@ function EmptyState({
       <p className="mx-auto mt-1 max-w-2xl text-sm text-gray-500">
         {description}
       </p>
+    </div>
+  );
+}
+
+function ModuleUnavailableState({ onRetry }: { onRetry: () => void }) {
+  return (
+    <div className="rounded-lg border border-amber-200 bg-amber-50 p-5 text-center text-amber-900 shadow-sm">
+      <h3 className="text-base font-semibold">{ADMIN_MODULE_UNAVAILABLE_MESSAGE}</h3>
+      <p className="mt-1 text-sm text-amber-800">
+        La información de esta sección no puede consultarse en este momento.
+      </p>
+      <button
+        type="button"
+        onClick={onRetry}
+        className="mt-3 rounded border border-amber-300 bg-white px-3 py-1.5 text-xs font-semibold hover:bg-amber-100"
+      >
+        Volver a cargar
+      </button>
     </div>
   );
 }
@@ -3086,7 +3112,7 @@ export default function AdminPage() {
     },
     {
       label: "Alertas",
-      value: [
+      value: countActionableAdminAlerts([
         reportsError,
         rentalHistoriesError,
         identityVerificationsError,
@@ -3098,7 +3124,7 @@ export default function AdminPage() {
         dataDisputesError,
         dataInventoryError,
         auditLogsError,
-      ].filter(Boolean).length,
+      ]),
       target: "summary" as AdminTab,
       tone: "slate",
     },
@@ -3119,7 +3145,9 @@ export default function AdminPage() {
   }> = [
     {
       label: "Verificar identidad",
-      count: pendingIdentityVerificationsCount,
+      count:
+        pendingIdentityVerificationsCount ??
+        identityVerifications.filter((item) => item.verification_status === "pending").length,
       owner: "Compliance",
       tone: "pending",
       target: "identityVerifications",
@@ -3368,9 +3396,18 @@ export default function AdminPage() {
 
       const response = await fetchJson("/api/admin/reports");
       const data: AdminReportsResponse = await response.json();
-
-      if (!response.ok || !data.success) {
-        throw new Error(data.message || "No se pudieron cargar los reportes");
+      const classification = classifyAdminResponse(
+        response,
+        data,
+        "No se pudieron cargar los reportes"
+      );
+      if (classification.kind === "degraded") {
+        setReports([]);
+        setReportsLoadingState("degraded");
+        return;
+      }
+      if (classification.kind === "error") {
+        throw new Error(classification.message);
       }
 
       setReports(data.reports || []);
@@ -3393,9 +3430,18 @@ export default function AdminPage() {
 
       const response = await fetchJson("/api/admin/report-actions");
       const data: AdminActionsResponse = await response.json();
-
-      if (!response.ok || !data.success) {
-        throw new Error(data.message || "No se pudo cargar el historial admin");
+      const classification = classifyAdminResponse(
+        response,
+        data,
+        "No se pudo cargar el historial admin"
+      );
+      if (classification.kind === "degraded") {
+        setActions([]);
+        setActionsLoadingState("degraded");
+        return;
+      }
+      if (classification.kind === "error") {
+        throw new Error(classification.message);
       }
 
       setActions(data.actions || []);
@@ -3419,9 +3465,18 @@ export default function AdminPage() {
 
       const response = await fetchJson("/api/admin/rental-histories");
       const data: RentalHistoriesResponse = await response.json();
-
-      if (!response.ok || !data.success) {
-        throw new Error(data.message || "No se pudieron cargar los historiales arrendaticios");
+      const classification = classifyAdminResponse(
+        response,
+        data,
+        "No se pudieron cargar los historiales arrendaticios"
+      );
+      if (classification.kind === "degraded") {
+        setRentalHistories([]);
+        setRentalHistoriesLoadingState("degraded");
+        return;
+      }
+      if (classification.kind === "error") {
+        throw new Error(classification.message);
       }
 
       setRentalHistories(data.rental_histories || []);
@@ -3482,9 +3537,18 @@ export default function AdminPage() {
 
       const response = await fetchJson("/api/admin/legal-case-signals");
       const data: LegalSignalsResponse = await response.json();
-
-      if (!response.ok || !data.success) {
-        throw new Error(data.message || "No se pudieron cargar las señales judiciales");
+      const classification = classifyAdminResponse(
+        response,
+        data,
+        "No se pudieron cargar las señales judiciales"
+      );
+      if (classification.kind === "degraded") {
+        setSignals([]);
+        setSignalsLoadingState("degraded");
+        return;
+      }
+      if (classification.kind === "error") {
+        throw new Error(classification.message);
       }
 
       setSignals(data.signals || []);
@@ -3567,9 +3631,18 @@ export default function AdminPage() {
 
       const response = await fetchJson(`/api/admin/plan-change-logs?${params.toString()}`);
       const data: PlanChangeLogsResponse = await response.json();
-
-      if (!response.ok || !data.success) {
-        throw new Error(data.message || "No se pudo cargar el historial de planes");
+      const classification = classifyAdminResponse(
+        response,
+        data,
+        "No se pudo cargar el historial de planes"
+      );
+      if (classification.kind === "degraded") {
+        setPlanChangeLogs([]);
+        setPlanLogsLoadingState("degraded");
+        return;
+      }
+      if (classification.kind === "error") {
+        throw new Error(classification.message);
       }
 
       setPlanChangeLogs(data.logs || []);
@@ -3652,9 +3725,18 @@ export default function AdminPage() {
 
       const response = await fetchJson(`/api/admin/data-requests?${params.toString()}`);
       const data: AdminDataSubjectRequestsResponse = await response.json();
-
-      if (!response.ok || !data.success) {
-        throw new Error(data.message || "No se pudieron cargar las solicitudes de datos");
+      const classification = classifyAdminResponse(
+        response,
+        data,
+        "No se pudieron cargar las solicitudes de datos"
+      );
+      if (classification.kind === "degraded") {
+        setDataRequests([]);
+        setDataRequestsLoadingState("degraded");
+        return;
+      }
+      if (classification.kind === "error") {
+        throw new Error(classification.message);
       }
 
       setDataRequests(data.requests || []);
@@ -3698,9 +3780,18 @@ export default function AdminPage() {
 
       const response = await fetchJson(`/api/admin/human-review-requests?${params.toString()}`);
       const data: AdminHumanReviewRequestsResponse = await response.json();
-
-      if (!response.ok || !data.success) {
-        throw new Error(data.message || "No se pudieron cargar las solicitudes de revision humana");
+      const classification = classifyAdminResponse(
+        response,
+        data,
+        "No se pudieron cargar las solicitudes de revision humana"
+      );
+      if (classification.kind === "degraded") {
+        setHumanReviewRequests([]);
+        setHumanReviewRequestsLoadingState("degraded");
+        return;
+      }
+      if (classification.kind === "error") {
+        throw new Error(classification.message);
       }
 
       setHumanReviewRequests(data.requests || []);
@@ -3744,9 +3835,18 @@ export default function AdminPage() {
 
       const response = await fetchJson(`/api/admin/disputes?${params.toString()}`);
       const data: AdminDataDisputesResponse = await response.json();
-
-      if (!response.ok || !data.success) {
-        throw new Error(data.message || "No se pudieron cargar las disputas");
+      const classification = classifyAdminResponse(
+        response,
+        data,
+        "No se pudieron cargar las disputas"
+      );
+      if (classification.kind === "degraded") {
+        setDataDisputes([]);
+        setDataDisputesLoadingState("degraded");
+        return;
+      }
+      if (classification.kind === "error") {
+        throw new Error(classification.message);
       }
 
       setDataDisputes(data.disputes || []);
@@ -3789,9 +3889,18 @@ export default function AdminPage() {
 
       const response = await fetchJson(`/api/admin/data-inventory?${params.toString()}`);
       const data: DataInventoryResponse = await response.json();
-
-      if (!response.ok || !data.success) {
-        throw new Error(data.message || "No se pudo cargar el inventario de datos");
+      const classification = classifyAdminResponse(
+        response,
+        data,
+        "No se pudo cargar el inventario de datos"
+      );
+      if (classification.kind === "degraded") {
+        setDataInventoryItems([]);
+        setDataInventoryLoadingState("degraded");
+        return;
+      }
+      if (classification.kind === "error") {
+        throw new Error(classification.message);
       }
 
       setDataInventoryItems(data.items || []);
@@ -3893,7 +4002,7 @@ export default function AdminPage() {
         throw new Error(data.message || "No se pudieron cargar las métricas.");
       }
 
-      setMetricsState({ status: "success", data: data.metrics });
+      setMetricsState({ status: "success", data: data.metrics, partial: data.partial });
     } catch (err) {
       const message =
         err instanceof Error ? err.message : "No se pudieron cargar las métricas.";
@@ -5457,7 +5566,7 @@ export default function AdminPage() {
             >
               <SystemMetricCard
                 label={card.label}
-                value={card.value.toLocaleString("es-CO")}
+                value={formatNullableAdminMetric(card.value)}
                 description="Abrir cola operacional"
               />
             </button>
@@ -5536,6 +5645,12 @@ export default function AdminPage() {
                 No se pudieron cargar las métricas.
               </div>
             ) : commercialMetrics ? (
+              <>
+              {metricsState.status === "success" && metricsState.partial && (
+                <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                  Algunas métricas no están disponibles temporalmente.
+                </div>
+              )}
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-4">
                 <MetricCard
                   label="Búsquedas hoy"
@@ -5608,6 +5723,7 @@ export default function AdminPage() {
                   value={formatMetricPercentage(commercialMetrics.payment_approval_rate_7d)}
                 />
               </div>
+              </>
             ) : null}
           </section>
         )}
@@ -5710,6 +5826,8 @@ export default function AdminPage() {
 
           {reportsLoadingState === "loading" ? (
             <LoadingSkeleton count={2} />
+          ) : reportsLoadingState === "degraded" ? (
+            <ModuleUnavailableState onRetry={loadReports} />
           ) : filteredReports.length === 0 ? (
             <EmptyState
               title={reports.length === 0 ? "Sin reportes pendientes" : "Sin resultados"}
@@ -5763,6 +5881,8 @@ export default function AdminPage() {
 
           {actionsLoadingState === "loading" ? (
             <LoadingSkeleton count={1} />
+          ) : actionsLoadingState === "degraded" ? (
+            <ModuleUnavailableState onRetry={loadActions} />
           ) : actions.length === 0 ? (
             <EmptyState
               title="Sin historial"
@@ -5897,6 +6017,8 @@ export default function AdminPage() {
 
           {rentalHistoriesLoadingState === "loading" ? (
             <LoadingSkeleton count={2} />
+          ) : rentalHistoriesLoadingState === "degraded" ? (
+            <ModuleUnavailableState onRetry={loadRentalHistories} />
           ) : rentalHistories.length === 0 ? (
             <EmptyState
               title="Sin historiales arrendaticios"
@@ -6279,6 +6401,10 @@ export default function AdminPage() {
                 <div className="p-4">
                   <LoadingSkeleton count={1} />
                 </div>
+              ) : planLogsLoadingState === "degraded" ? (
+                <div className="p-4">
+                  <ModuleUnavailableState onRetry={loadPlanChangeLogs} />
+                </div>
               ) : planChangeLogs.length === 0 ? (
                 <p className="px-4 py-5 text-sm text-gray-500">
                   Sin cambios de plan registrados
@@ -6495,7 +6621,7 @@ export default function AdminPage() {
                 </button>
               </div>
             </div>
-          </form>
+            </form>
 
           {wompiPaymentsError && (
             <ErrorAlert message={wompiPaymentsError} onRetry={loadWompiPayments} />
@@ -6893,6 +7019,8 @@ export default function AdminPage() {
 
           {dataDisputesLoadingState === "loading" ? (
             <LoadingSkeleton count={2} />
+          ) : dataDisputesLoadingState === "degraded" ? (
+            <ModuleUnavailableState onRetry={loadDataDisputes} />
           ) : dataDisputes.length === 0 ? (
             <EmptyState
               title="Sin disputas"
@@ -7174,6 +7302,8 @@ export default function AdminPage() {
 
           {dataRequestsLoadingState === "loading" ? (
             <LoadingSkeleton count={2} />
+          ) : dataRequestsLoadingState === "degraded" ? (
+            <ModuleUnavailableState onRetry={loadDataRequests} />
           ) : dataRequests.length === 0 ? (
             <EmptyState
               title="Sin solicitudes"
@@ -7439,6 +7569,8 @@ export default function AdminPage() {
 
           {humanReviewRequestsLoadingState === "loading" ? (
             <LoadingSkeleton count={2} />
+          ) : humanReviewRequestsLoadingState === "degraded" ? (
+            <ModuleUnavailableState onRetry={loadHumanReviewRequests} />
           ) : humanReviewRequests.length === 0 ? (
             <EmptyState
               title="Sin solicitudes"
@@ -7780,6 +7912,7 @@ export default function AdminPage() {
             </div>
           </form>
 
+          {dataInventoryLoadingState !== "degraded" && (
           <form
             className="mb-4 rounded-lg border border-gray-200 bg-white p-4 shadow-sm"
             onSubmit={saveDataInventoryItem}
@@ -8020,6 +8153,7 @@ export default function AdminPage() {
               </button>
             </div>
           </form>
+          )}
 
           {dataInventoryError && (
             <ErrorAlert message={dataInventoryError} onRetry={loadDataInventory} />
@@ -8027,6 +8161,8 @@ export default function AdminPage() {
 
           {dataInventoryLoadingState === "loading" ? (
             <LoadingSkeleton count={2} />
+          ) : dataInventoryLoadingState === "degraded" ? (
+            <ModuleUnavailableState onRetry={loadDataInventory} />
           ) : dataInventoryItems.length === 0 ? (
             <EmptyState
               title="Sin inventario"
@@ -8747,6 +8883,8 @@ export default function AdminPage() {
 
           {signalsLoadingState === "loading" ? (
             <LoadingSkeleton count={2} />
+          ) : signalsLoadingState === "degraded" ? (
+            <ModuleUnavailableState onRetry={loadSignals} />
           ) : filteredSignals.length === 0 ? (
             <EmptyState
               title={signals.length === 0 ? "Sin señales judiciales" : "Sin resultados"}

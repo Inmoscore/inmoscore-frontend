@@ -571,7 +571,6 @@ export default function AportarHistorialPage() {
     const payload = buildPayload(form);
 
     try {
-      console.log('[RENTAL_HISTORY_SUBMIT]', payload);
       const response = await fetch(`${API_URL}/api/rental-histories`, {
         method: 'POST',
         headers: {

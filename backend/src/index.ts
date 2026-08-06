@@ -33,6 +33,15 @@ import {
 import { appendPublicPath, resolvePublicFrontendUrl } from './lib/publicUrl';
 import { buildAllowedOrigins, isCorsOriginAllowed } from './lib/corsOrigins';
 import { logLegalReportAudit } from './lib/legalReportAudit';
+import {
+  buildOperationalLogEntry,
+  getDatabaseErrorCode,
+  hasUnavailableMetric,
+  isMissingSchemaError,
+  safeCount,
+  sendMigrationRequired,
+  writeOperationalLog,
+} from './lib/adminOperationalSafety';
 import { logSecurityEvent } from './securityAudit';
 import {
   BackupCodeHash,
@@ -63,6 +72,19 @@ import {
   isRestrictedSessionAllowed,
   requireConfirmedEmailSession,
 } from './lib/emailVerificationPolicy';
+
+function logSanitizedError(event: string, operation: string, endpointKey: string, error: unknown): void {
+  writeOperationalLog(
+    'error',
+    event,
+    buildOperationalLogEntry({
+      category: 'database_operation_failed',
+      operation,
+      endpointKey,
+      error,
+    })
+  );
+}
 
 type SecureDocumentAccessMetadata = {
   id: string;
@@ -2648,8 +2670,8 @@ async function ensureSupabaseAuthUserForPassword(params: {
   if (error) {
     console.warn('[SUPABASE_AUTH_USER_PROVISION_FAILED]', {
       user_id: params.userId,
-      email: params.email,
-      error: error.message,
+      error_category: 'auth_user_provision_failed',
+      database_error_code: getDatabaseErrorCode(error),
     });
     return null;
   }
@@ -3200,7 +3222,7 @@ async function getTodaySearchCount(userId: string): Promise<number> {
     .not('used_for_search_log_id', 'is', null);
 
   if (bonusCreditError) {
-    console.error('[SEARCH_CREDIT_DAILY_COUNT_ERROR]', bonusCreditError);
+    logSanitizedError('[SEARCH_CREDIT_DAILY_COUNT_ERROR]', 'count', 'search_credits', bonusCreditError);
     return searchLogCount;
   }
 
@@ -3217,7 +3239,7 @@ async function getActiveSearchCreditsCount(userId: string): Promise<number> {
     .gt('expires_at', new Date().toISOString());
 
   if (error) {
-    console.error('[SEARCH_CREDIT_COUNT_ERROR]', error);
+    logSanitizedError('[SEARCH_CREDIT_COUNT_ERROR]', 'count', 'search_credits', error);
     return 0;
   }
 
@@ -3238,7 +3260,7 @@ async function getNextActiveSearchCredit(userId: string): Promise<{ id: string }
     .maybeSingle();
 
   if (error) {
-    console.error('[SEARCH_CREDIT_LOOKUP_ERROR]', error);
+    logSanitizedError('[SEARCH_CREDIT_LOOKUP_ERROR]', 'select', 'search_credits', error);
     return null;
   }
 
@@ -3300,7 +3322,7 @@ async function grantRentalHistoryVerifiedSearchCredit(params: {
 
     return { granted: true, reason: 'granted' };
   } catch (error) {
-    console.error('[SEARCH_CREDIT_GRANT_ERROR]', error);
+    logSanitizedError('[SEARCH_CREDIT_GRANT_ERROR]', 'insert', 'search_credits', error);
     return { granted: false, reason: 'not_applicable' };
   }
 }
@@ -3367,7 +3389,7 @@ async function getUserSearchPlan(
       daily_search_limit: rawDailyLimit,
     };
   } catch (error) {
-    console.error('[search_limit] Error obteniendo plan del usuario:', error);
+    logSanitizedError('[SEARCH_LIMIT_ERROR]', 'select_plan', 'search_limit', error);
     return {
       plan_type: 'free',
       daily_search_limit: 3,
@@ -3405,7 +3427,7 @@ async function getSearchLimitInfo(user: {
       bonus_credit_used: false,
     };
   } catch (error) {
-    console.error('[search_limit] Error obteniendo información de límite:', error);
+    logSanitizedError('[SEARCH_LIMIT_ERROR]', 'select_limit', 'search_limit', error);
     return {
       plan_type: searchPlan.plan_type,
       daily_limit: searchPlan.daily_search_limit,
@@ -3572,7 +3594,7 @@ async function consumeSearchCredit(creditId: string, searchLogId: string | null)
     .maybeSingle();
 
   if (creditError) {
-    console.error('[SEARCH_CREDIT_CONSUME_ERROR]', creditError);
+    logSanitizedError('[SEARCH_CREDIT_CONSUME_ERROR]', 'update', 'search_credits', creditError);
     return;
   }
 
@@ -3604,7 +3626,7 @@ async function consumeSearchCredit(creditId: string, searchLogId: string | null)
     .gt('remaining', 0);
 
   if (error) {
-    console.error('[SEARCH_CREDIT_CONSUME_ERROR]', error);
+    logSanitizedError('[SEARCH_CREDIT_CONSUME_ERROR]', 'update', 'search_credits', error);
   }
 }
 
@@ -3722,7 +3744,7 @@ async function assertSearchLimit(
       bonusCreditId: null,
     };
   } catch (error) {
-    console.error('[search_limit] Error validando límite diario:', error);
+    logSanitizedError('[SEARCH_LIMIT_ERROR]', 'validate', 'search_limit', error);
     if (auditContext) {
       await insertSearchAuditLog({
         tenant_id: null,
@@ -3841,12 +3863,10 @@ async function requireVerifiedIdentityForSensitiveContribution(
 
 async function requireAdmin(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
   const jwtUserId = req.user?.id || null;
-  const jwtEmail = req.user?.email || null;
 
   if (!jwtUserId) {
     console.warn('[ADMIN_ROLE_REVALIDATION_FAILED]', {
       user_id: null,
-      email: jwtEmail,
       reason: 'missing_user_id',
     });
     res.status(403).json({
@@ -3870,7 +3890,6 @@ async function requireAdmin(req: AuthRequest, res: Response, next: NextFunction)
     if (!currentUser || currentUser.tipo_usuario !== 'admin') {
       console.warn('[ADMIN_ROLE_REVALIDATION_FAILED]', {
         user_id: jwtUserId,
-        email: currentUser?.email || jwtEmail,
         reason: currentUser ? 'not_admin' : 'user_not_found',
       });
       res.status(403).json({
@@ -3884,9 +3903,8 @@ async function requireAdmin(req: AuthRequest, res: Response, next: NextFunction)
   } catch (error) {
     console.warn('[ADMIN_ROLE_REVALIDATION_FAILED]', {
       user_id: jwtUserId,
-      email: jwtEmail,
       reason: 'db_error',
-      error: error instanceof Error ? error.message : 'unknown',
+      database_error_code: getDatabaseErrorCode(error),
     });
     res.status(500).json({
       success: false,
@@ -3984,9 +4002,8 @@ async function requireRecentAdminMfa(
   } catch (error) {
     console.warn('[ADMIN_MFA_REVALIDATION_FAILED]', {
       user_id: adminUserId,
-      email: req.user?.email || null,
       reason: 'db_error',
-      error: error instanceof Error ? error.message : 'unknown',
+      database_error_code: getDatabaseErrorCode(error),
     });
     res.status(500).json({
       success: false,
@@ -4242,7 +4259,7 @@ app.get('/api/documents/:id/access', authenticateToken, async (req: AuthRequest,
       message: 'Metadata segura del documento. No se emiten URLs publicas.',
     });
   } catch (error) {
-    console.error('Error consultando metadata documental segura:', error);
+    logSanitizedError('[SECURE_DOCUMENT_METADATA_ERROR]', 'select', 'secure_documents', error);
     try {
       await logDocumentAccess({
         documentId,
@@ -4611,7 +4628,7 @@ app.get('/api/documents/:id/signed-read', authenticateToken, async (req: AuthReq
       signed_url: signedRead.signedUrl,
     });
   } catch (error) {
-    console.error('Error creando signed read documental seguro:', error);
+    logSanitizedError('[SECURE_DOCUMENT_SIGNED_READ_ERROR]', 'signed_read', 'secure_documents', error);
     res.status(500).json({
       success: false,
       message: 'Error interno creando acceso temporal al documento',
@@ -5516,7 +5533,6 @@ app.post('/api/auth/register', async (req: Request, res: Response) => {
 
     if (requestedTipoUsuario && requestedTipoUsuarioNormalized !== tipo_usuario) {
       console.warn('[AUTH_REGISTER_ROLE_BLOCKED]', {
-        email,
         requested_tipo_usuario: requestedTipoUsuario.slice(0, 80),
         forced_tipo_usuario: tipo_usuario,
         ip_address: requestIp,
@@ -5561,7 +5577,7 @@ app.post('/api/auth/register', async (req: Request, res: Response) => {
       .maybeSingle();
 
     if (existingUserError) {
-      console.error('Error verificando usuario existente:', existingUserError);
+      logSanitizedError('[AUTH_REGISTER_LOOKUP_ERROR]', 'select', 'auth_register', existingUserError);
       res.status(500).json({
         success: false,
         message: 'Error verificando usuario existente',
@@ -5591,10 +5607,12 @@ app.post('/api/auth/register', async (req: Request, res: Response) => {
       .maybeSingle();
 
     if (existingDocumentError) {
-      console.error('[AUTH_REGISTER_DOCUMENT_LOOKUP_ERROR]', {
-        error: existingDocumentError.message,
-        document_type: documentType,
-      });
+      logSanitizedError(
+        '[AUTH_REGISTER_DOCUMENT_LOOKUP_ERROR]',
+        'select',
+        'auth_register_document',
+        existingDocumentError
+      );
       res.status(500).json({
         success: false,
         message: 'No se pudo validar el documento',
@@ -5689,7 +5707,7 @@ app.post('/api/auth/register', async (req: Request, res: Response) => {
       .single();
 
     if (insertError || !newUser) {
-      console.error('Error creando usuario:', insertError);
+      logSanitizedError('[AUTH_REGISTER_INSERT_ERROR]', 'insert', 'auth_register', insertError);
       res.status(500).json({
         success: false,
         message: 'No se pudo crear el usuario',
@@ -5821,7 +5839,7 @@ app.post('/api/auth/register', async (req: Request, res: Response) => {
       },
     });
   } catch (error) {
-    console.error('Error en registro:', error);
+    logSanitizedError('[AUTH_REGISTER_ERROR]', 'register', 'auth_register', error);
     res.status(500).json({
       success: false,
       message: 'Error al registrar usuario',
@@ -5871,7 +5889,6 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
 
     console.info('[AUTH_LOGIN_DEBUG]', {
       action: 'login_attempt',
-      email: cleanEmail,
       endpoint: '/api/auth/login',
       request_id: requestId,
     });
@@ -5896,7 +5913,6 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
       } else if ((legacyEmailMatches?.length || 0) > 1) {
         console.warn('[AUTH_LOGIN_DEBUG]', {
           action: 'case_insensitive_email_ambiguous',
-          email: cleanEmail,
           match_count: legacyEmailMatches?.length || 0,
           request_id: requestId,
         });
@@ -5906,8 +5922,8 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
     if (error || !user) {
       console.warn('[AUTH_LOGIN_DEBUG]', {
         action: 'user_lookup_failed',
-        email: cleanEmail,
-        error: error ? error.message : null,
+        error_category: error ? 'database_lookup_failed' : 'invalid_credentials',
+        database_error_code: getDatabaseErrorCode(error),
         request_id: requestId,
       });
       await logAuthenticationAudit({
@@ -5932,7 +5948,6 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
     if (!isValidPassword) {
       console.warn('[AUTH_LOGIN_DEBUG]', {
         action: 'password_compare_failed',
-        email: cleanEmail,
         user_id: user.id,
         request_id: requestId,
       });
@@ -6016,7 +6031,7 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
       },
     });
   } catch (error) {
-    console.error('Error en login:', error);
+    logSanitizedError('[AUTH_LOGIN_ERROR]', 'login', 'auth_login', error);
     await logAuthenticationAudit({
       email:
         typeof (req.body as { email?: unknown } | null)?.email === 'string'
@@ -6233,16 +6248,9 @@ app.post('/api/auth/password-reset', async (req: Request, res: Response) => {
         passwordResetEmailErrorMessage = error.message;
         console.warn('[AUTH_PASSWORD_RESET_EMAIL_FAILED]', {
           user_id: user.id,
-          error: error.message,
+          error_category: 'password_reset_delivery_failed',
+          database_error_code: getDatabaseErrorCode(error),
         });
-
-        if (process.env.NODE_ENV !== 'production') {
-          console.warn('[AUTH_PASSWORD_RESET_SUPABASE_ERROR_DEBUG]', {
-            user_id: user.id,
-            email,
-            error,
-          });
-        }
       }
 
       await logAccountSecurityEvent(req, 'password_reset_requested', user.id, {
@@ -6274,10 +6282,7 @@ app.post('/api/auth/password-reset', async (req: Request, res: Response) => {
         : {}),
     });
   } catch (error) {
-    console.error('[AUTH_PASSWORD_RESET_ERROR]', {
-      email,
-      error: error instanceof Error ? error.message : 'unknown',
-    });
+    logSanitizedError('[AUTH_PASSWORD_RESET_ERROR]', 'request', 'password_reset', error);
     await logAuthenticationAudit({
       email,
       event_type: 'password.reset.request',
@@ -6583,7 +6588,7 @@ app.post('/api/upgrade-events', authenticateToken, async (req: AuthRequest, res:
 
     res.status(201).json({ success: true });
   } catch (error) {
-    console.error('[upgrade-events] Error:', error);
+    logSanitizedError('[UPGRADE_EVENT_ERROR]', 'insert', 'upgrade_events', error);
     res.status(500).json({
       success: false,
       message: 'No se pudo registrar el evento',
@@ -6722,7 +6727,17 @@ app.get('/api/tenants/search', authenticateToken, async (req: AuthRequest, res: 
           user_agent: requestUserAgent,
         });
       } catch (searchLogError) {
-        console.error(`[search_logs] Error guardando auditoría de búsqueda ${cleanCedula}:`, searchLogError);
+        writeOperationalLog(
+          'error',
+          '[SEARCH_AUDIT_FAILED]',
+          buildOperationalLogEntry({
+            category: 'search_audit_insert_failed',
+            operation: 'insert',
+            endpointKey: 'search_logs',
+            error: searchLogError,
+            correlationId: requestId || undefined,
+          })
+        );
       }
 
       if (searchLimitDecision.bonusCreditId) {
@@ -6978,10 +6993,7 @@ app.get('/api/tenants/search', authenticateToken, async (req: AuthRequest, res: 
         persistedScore = await calculateAndStoreScore(tenant.id, tenant.cedula);
       }
     } catch (scoreError) {
-      console.error(
-        `[score] Error resolviendo score para tenant_id=${tenant.id}, cedula=${tenant.cedula}:`,
-        scoreError
-      );
+      logSanitizedError('[SCORE_RESOLUTION_ERROR]', 'resolve', 'tenant_score', scoreError);
       throw scoreError;
     }
 
@@ -7013,9 +7025,16 @@ app.get('/api/tenants/search', authenticateToken, async (req: AuthRequest, res: 
         user_agent: requestUserAgent,
       });
     } catch (searchLogError) {
-      console.error(
-        `[search_logs] Error guardando auditoría de búsqueda tenant_id=${tenant.id}, cedula=${cleanCedula}:`,
-        searchLogError
+      writeOperationalLog(
+        'error',
+        '[SEARCH_AUDIT_FAILED]',
+        buildOperationalLogEntry({
+          category: 'search_audit_insert_failed',
+          operation: 'insert',
+          endpointKey: 'search_logs',
+          error: searchLogError,
+          correlationId: requestId || undefined,
+        })
       );
     }
 
@@ -7073,7 +7092,7 @@ app.get('/api/tenants/search', authenticateToken, async (req: AuthRequest, res: 
       ...adjustedLimitInfo,
     });
   } catch (error) {
-    console.error('Error al buscar arrendatario:', error);
+    logSanitizedError('[TENANT_SEARCH_ERROR]', 'search', 'tenant_search', error);
     await insertSearchAuditLog({
       tenant_id: null,
       user_id: req.user?.id || null,
@@ -7148,7 +7167,7 @@ app.get('/api/tenants/:cedula', authenticateToken, async (req: AuthRequest, res:
       reports: reports || [],
     });
   } catch (error) {
-    console.error('Error en búsqueda detalle:', error);
+    logSanitizedError('[TENANT_DETAIL_ERROR]', 'select', 'tenant_detail', error);
     res.status(500).json({
       success: false,
       message: 'Error interno',
@@ -7748,15 +7767,17 @@ app.post('/api/reports', authenticateToken, async (req: AuthRequest, res: Respon
       evidence: evidenceFiles || [],
     });
   } catch (error: any) {
-    console.error('[REPORT_CREATE_ERROR]', {
-      phase: reportCreatePhase,
-      table: reportCreateTable,
-      columns: reportCreateColumns,
-      user_id: reporterUserIdForLog,
-      report_id: reportIdForLog,
-      message: error instanceof Error ? error.message : getSupabaseErrorMessage(error),
-      ...buildSupabaseErrorLog(error),
-    });
+    writeOperationalLog(
+      'error',
+      '[REPORT_CREATE_ERROR]',
+      buildOperationalLogEntry({
+        category: 'report_create_failed',
+        operation: reportCreatePhase || 'create',
+        endpointKey: 'reports',
+        error,
+        correlationId: getRequestId(req) || undefined,
+      })
+    );
 
     await logLegalReportAudit({
       tenant_id: reportTenantIdForAudit,
@@ -7872,8 +7893,6 @@ app.post('/api/rental-histories', authenticateToken, async (req: AuthRequest, re
       currency: 'COP',
     };
 
-    console.error('[RENTAL_HISTORY_INSERT_PAYLOAD]', insertPayload);
-
     const { data: rentalHistory, error } = await supabase
       .from('tenant_rental_histories')
       .insert(insertPayload)
@@ -7924,10 +7943,7 @@ app.post('/api/rental-histories', authenticateToken, async (req: AuthRequest, re
     });
   } catch (error) {
     const dbError = error as { message?: string; code?: string };
-    console.error('[RENTAL_HISTORY_CREATE_ERROR]', {
-      message: dbError?.message,
-      code: dbError?.code,
-    });
+    logSanitizedError('[RENTAL_HISTORY_CREATE_ERROR]', 'insert', 'rental_history', dbError);
     res.status(500).json({
       success: false,
       error: 'No se pudo guardar el historial en este momento',
@@ -7939,25 +7955,7 @@ app.post('/api/rental-histories', authenticateToken, async (req: AuthRequest, re
 // ADMIN ROUTES
 // ================================
 
-async function safeCount(
-  label: string,
-  query: PromiseLike<{ count: number | null; error: any }>
-): Promise<number> {
-  try {
-    const { count, error } = await query;
-
-    if (error) {
-      throw error;
-    }
-
-    return count || 0;
-  } catch (err) {
-    console.error(`[AdminMetrics] ${label} falló:`, err);
-    return 0;
-  }
-}
-
-async function countPendingIdentityVerificationDocuments(): Promise<number> {
+async function countPendingIdentityVerificationDocuments(): Promise<number | null> {
   try {
     const { data, error } = await supabase
       .from('secure_documents' as any)
@@ -7978,24 +7976,29 @@ async function countPendingIdentityVerificationDocuments(): Promise<number> {
       return (identityMetadata.review_status || 'pending') === 'pending';
     }).length;
   } catch (err) {
-    console.error('[AdminMetrics] identity_verifications_pending fallÃ³:', err);
-    return 0;
+    writeOperationalLog(
+      'error',
+      '[ADMIN_METRIC_UNAVAILABLE]',
+      buildOperationalLogEntry({
+        category: 'metric_query_failed',
+        operation: 'count',
+        endpointKey: 'identity_verifications_pending',
+        error: err,
+      })
+    );
+    return null;
   }
 }
 
-function getSettledNumber(result: PromiseSettledResult<number>): number {
-  return result.status === 'fulfilled' && Number.isFinite(result.value) ? result.value : 0;
+function getSettledMetric(result: PromiseSettledResult<number | null>): number | null {
+  return result.status === 'fulfilled' && typeof result.value === 'number' && Number.isFinite(result.value)
+    ? result.value
+    : null;
 }
 
 function roundPercentage(value: number): number {
   if (!Number.isFinite(value)) return 0;
   return Math.round(value * 100) / 100;
-}
-
-function getSupabaseErrorCode(error: unknown): string | null {
-  return typeof error === 'object' && error !== null && 'code' in error
-    ? String((error as { code?: unknown }).code || '')
-    : null;
 }
 
 function getSupabaseErrorMessage(error: unknown): string {
@@ -8008,24 +8011,6 @@ function getSupabaseErrorMessage(error: unknown): string {
   }
 
   return 'unknown';
-}
-
-function getSupabaseErrorDetails(error: unknown): string | null {
-  if (typeof error === 'object' && error !== null && 'details' in error) {
-    const details = (error as { details?: unknown }).details;
-    return details ? String(details) : null;
-  }
-
-  return null;
-}
-
-function getSupabaseErrorHint(error: unknown): string | null {
-  if (typeof error === 'object' && error !== null && 'hint' in error) {
-    const hint = (error as { hint?: unknown }).hint;
-    return hint ? String(hint) : null;
-  }
-
-  return null;
 }
 
 function sanitizeStoragePathForLog(value: unknown): string | null {
@@ -8041,28 +8026,11 @@ function sanitizeStoragePathForLog(value: unknown): string | null {
 
 function buildSupabaseErrorLog(error: unknown) {
   return {
-    supabase_error_code: getSupabaseErrorCode(error),
-    supabase_error_message: getSupabaseErrorMessage(error),
-    supabase_error_details: getSupabaseErrorDetails(error),
-    supabase_error_hint: getSupabaseErrorHint(error),
+    error_category: isMissingSchemaError(error)
+      ? 'schema_dependency_missing'
+      : 'database_operation_failed',
+    database_error_code: getDatabaseErrorCode(error),
   };
-}
-
-function isMissingSchemaError(error: unknown): boolean {
-  const code = getSupabaseErrorCode(error);
-  const message = getSupabaseErrorMessage(error).toLowerCase();
-
-  return (
-    code === '42P01' ||
-    code === '42703' ||
-    code === 'PGRST200' ||
-    code === 'PGRST205' ||
-    code === 'PGRST204' ||
-    message.includes('does not exist') ||
-    message.includes('could not find') ||
-    message.includes('schema cache') ||
-    message.includes('relationship')
-  );
 }
 
 function logAdminEndpointError(input: {
@@ -8072,20 +8040,18 @@ function logAdminEndpointError(input: {
   error: unknown;
   level?: 'warn' | 'error';
 }) {
-  const payload = {
-    endpoint: input.endpoint,
-    table: input.table,
-    operation: input.operation,
-    supabase_error_code: getSupabaseErrorCode(input.error),
-    supabase_error_message: getSupabaseErrorMessage(input.error),
-  };
-
-  if (input.level === 'warn') {
-    console.warn('[ADMIN_ENDPOINT_WARNING]', payload);
-    return;
-  }
-
-  console.error('[ADMIN_ENDPOINT_ERROR]', payload);
+  writeOperationalLog(
+    input.level === 'warn' ? 'warn' : 'error',
+    input.level === 'warn' ? '[ADMIN_ENDPOINT_WARNING]' : '[ADMIN_ENDPOINT_ERROR]',
+    buildOperationalLogEntry({
+      category: isMissingSchemaError(input.error)
+        ? 'schema_dependency_missing'
+        : 'database_operation_failed',
+      endpointKey: input.endpoint,
+      operation: input.operation,
+      error: input.error,
+    })
+  );
 }
 
 function buildAdminPagination(page: number, pageSize: number, total = 0) {
@@ -8097,45 +8063,18 @@ function buildAdminPagination(page: number, pageSize: number, total = 0) {
   };
 }
 
-function sendAdminEmptyList(
-  res: Response,
-  input: {
-    endpoint: string;
-    table: string;
-    operation: string;
-    error: unknown;
-    body: Record<string, unknown>;
-  }
-) {
-  logAdminEndpointError({
-    endpoint: input.endpoint,
-    table: input.table,
-    operation: input.operation,
-    error: input.error,
-    level: 'warn',
-  });
-
-  res.json({
-    success: true,
-    ...input.body,
-  });
-}
-
 function sendAdminMigrationRequired(
   res: Response,
   input: {
     endpoint: string;
-    table: string;
     operation: string;
     error: unknown;
-    message: string;
   }
 ) {
-  logAdminEndpointError(input);
-  res.status(503).json({
-    success: false,
-    code: 'MIGRATION_REQUIRED',
-    message: input.message,
+  sendMigrationRequired(res, {
+    endpointKey: input.endpoint,
+    operation: input.operation,
+    error: input.error,
   });
 }
 
@@ -8283,11 +8222,7 @@ app.get(
           : 0,
       });
     } catch (error) {
-      console.error('[ADMIN_MFA]', {
-        action: 'status_error',
-        admin_user_id: req.user?.id || null,
-        error: error instanceof Error ? error.message : 'unknown',
-      });
+      logSanitizedError('[ADMIN_MFA]', 'status', 'admin.mfa', error);
       res.status(500).json({ success: false, message: 'No se pudo cargar estado MFA' });
     }
   }
@@ -8348,11 +8283,7 @@ app.post(
         qr_payload: otpauthUri,
       });
     } catch (error) {
-      console.error('[ADMIN_MFA]', {
-        action: 'setup_error',
-        admin_user_id: req.user?.id || null,
-        error: error instanceof Error ? error.message : 'unknown',
-      });
+      logSanitizedError('[ADMIN_MFA]', 'setup', 'admin.mfa', error);
       res.status(503).json({
         success: false,
         message: 'No se pudo iniciar MFA administrativo',
@@ -8471,11 +8402,7 @@ app.post(
         mfa_last_verified_at: nowISO,
       });
     } catch (error) {
-      console.error('[ADMIN_MFA]', {
-        action: 'verify_error',
-        admin_user_id: req.user?.id || null,
-        error: error instanceof Error ? error.message : 'unknown',
-      });
+      logSanitizedError('[ADMIN_MFA]', 'verify', 'admin.mfa', error);
       res.status(503).json({ success: false, message: 'No se pudo verificar MFA' });
     }
   }
@@ -8602,11 +8529,7 @@ app.post(
         backup_codes_remaining: backupCodesRemaining,
       });
     } catch (error) {
-      console.error('[ADMIN_MFA]', {
-        action: 'challenge_error',
-        admin_user_id: req.user?.id || null,
-        error: error instanceof Error ? error.message : 'unknown',
-      });
+      logSanitizedError('[ADMIN_MFA]', 'challenge', 'admin.mfa', error);
       res.status(503).json({ success: false, message: 'No se pudo validar MFA' });
     }
   }
@@ -8695,17 +8618,13 @@ app.post(
 
       res.json({ success: true, mfa_enabled: false });
     } catch (error) {
-      console.error('[ADMIN_MFA]', {
-        action: 'disable_error',
-        admin_user_id: req.user?.id || null,
-        error: error instanceof Error ? error.message : 'unknown',
-      });
+      logSanitizedError('[ADMIN_MFA]', 'disable', 'admin.mfa', error);
       res.status(503).json({ success: false, message: 'No se pudo deshabilitar MFA' });
     }
   }
 );
 
-async function countUniqueSearchUsersSince(sinceISO: string): Promise<number> {
+async function countUniqueSearchUsersSince(sinceISO: string): Promise<number | null> {
   try {
     const { data, error } = await supabase
       .from('search_logs')
@@ -8720,8 +8639,17 @@ async function countUniqueSearchUsersSince(sinceISO: string): Promise<number> {
 
     return new Set((data || []).map((row) => row.user_id).filter(Boolean)).size;
   } catch (err) {
-    console.error('[AdminMetrics] unique_search_users_7d falló:', err);
-    return 0;
+    writeOperationalLog(
+      'error',
+      '[ADMIN_METRIC_UNAVAILABLE]',
+      buildOperationalLogEntry({
+        category: 'metric_query_failed',
+        operation: 'count_unique',
+        endpointKey: 'unique_search_users_7d',
+        error: err,
+      })
+    );
+    return null;
   }
 }
 
@@ -8755,7 +8683,16 @@ app.get(
         users,
       });
     } catch (err: any) {
-      console.error('[ADMIN_USERS_ERROR]', err);
+      writeOperationalLog(
+        'error',
+        '[ADMIN_USERS_ERROR]',
+        buildOperationalLogEntry({
+          category: 'database_operation_failed',
+          operation: 'select',
+          endpointKey: 'admin.users',
+          error: err,
+        })
+      );
       res.status(500).json({
         success: false,
         message: 'No se pudieron cargar los usuarios',
@@ -8854,7 +8791,7 @@ app.patch(
         });
 
       if (planChangeLogError) {
-        console.error('[ADMIN_PLAN_CHANGE_LOG_ERROR]', planChangeLogError);
+        logSanitizedError('[ADMIN_PLAN_CHANGE_LOG_ERROR]', 'insert', 'admin.plan_change_log', planChangeLogError);
       }
 
       res.json({
@@ -8869,7 +8806,16 @@ app.patch(
         },
       });
     } catch (err: any) {
-      console.error('[ADMIN_USERS_ERROR]', err?.message || err);
+      writeOperationalLog(
+        'error',
+        '[ADMIN_USERS_ERROR]',
+        buildOperationalLogEntry({
+          category: 'database_operation_failed',
+          operation: 'update',
+          endpointKey: 'admin.user_plan',
+          error: err,
+        })
+      );
       res.status(500).json({
         success: false,
         message: 'No se pudo actualizar el plan',
@@ -9008,19 +8954,11 @@ app.get(
         },
       });
     } catch (err: any) {
-      const page = clampNumber(parsePositiveInteger(req.query.page, 1), 1, 10000);
-      const pageSize = clampNumber(parsePositiveInteger(req.query.pageSize, 50), 1, 100);
-
       if (isMissingSchemaError(err)) {
-        sendAdminEmptyList(res, {
+        sendAdminMigrationRequired(res, {
           endpoint: '/api/admin/plan-change-logs',
-          table: 'plan_change_logs',
           operation: 'select',
           error: err,
-          body: {
-            logs: [],
-            pagination: buildAdminPagination(page, pageSize),
-          },
         });
         return;
       }
@@ -9096,16 +9034,18 @@ app.get(
         .order('created_at', { ascending: false })
         .limit(100);
 
-      console.error('[RENTAL_HISTORY_ADMIN_LIST]', {
-        filters,
-        count,
-        error: error
-          ? {
-              code: error.code,
-              message: error.message,
-            }
-          : null,
-      });
+      if (!error) {
+        writeOperationalLog(
+          'info',
+          '[RENTAL_HISTORY_ADMIN_LIST]',
+          buildOperationalLogEntry({
+            category: 'admin_list_loaded',
+            operation: 'select',
+            endpointKey: 'admin.rental_histories',
+            count: count ?? 0,
+          })
+        );
+      }
 
       if (error) {
         throw error;
@@ -9125,14 +9065,10 @@ app.get(
       });
     } catch (error) {
       if (isMissingSchemaError(error)) {
-        sendAdminEmptyList(res, {
+        sendAdminMigrationRequired(res, {
           endpoint: '/api/admin/rental-histories',
-          table: 'tenant_rental_histories',
           operation: 'select',
           error,
-          body: {
-            rental_histories: [],
-          },
         });
         return;
       }
@@ -9274,13 +9210,16 @@ app.patch(
 
       if (updateError || !rentalHistory) {
         if (status === 'rejected') {
-          console.error('[RENTAL_HISTORY_ADMIN_REJECT_ERROR]', {
-            rental_history_id: id,
-            admin_user_id: adminUserId,
-            attempted_update: updatePayload,
-            supabase_error: updateError,
-            supabase_error_log: updateError ? buildSupabaseErrorLog(updateError) : null,
-          });
+          writeOperationalLog(
+            'error',
+            '[RENTAL_HISTORY_ADMIN_REJECT_ERROR]',
+            buildOperationalLogEntry({
+              category: 'database_operation_failed',
+              operation: 'update',
+              endpointKey: 'admin.rental_history_status',
+              error: updateError,
+            })
+          );
         }
         throw updateError || new Error('No se pudo actualizar el historial arrendaticio');
       }
@@ -9307,13 +9246,16 @@ app.patch(
           });
 
         if (rentalHistoryActionError) {
-          console.error('[RENTAL_HISTORY_ADMIN_ACTION_ERROR]', {
-            rental_history_id: id,
-            admin_user_id: adminUserId,
-            action,
-            supabase_error: rentalHistoryActionError,
-            supabase_error_log: buildSupabaseErrorLog(rentalHistoryActionError),
-          });
+          writeOperationalLog(
+            'error',
+            '[RENTAL_HISTORY_ADMIN_ACTION_ERROR]',
+            buildOperationalLogEntry({
+              category: 'audit_insert_failed',
+              operation: 'insert',
+              endpointKey: 'admin.rental_history_action',
+              error: rentalHistoryActionError,
+            })
+          );
           throw rentalHistoryActionError;
         }
       }
@@ -9342,14 +9284,27 @@ app.patch(
       });
     } catch (error) {
       if (String(req.body?.status || '') === 'rejected') {
-        console.error('[RENTAL_HISTORY_ADMIN_REJECT_ERROR]', {
-          rental_history_id: req.params.id,
-          admin_user_id: req.user?.id || null,
-          supabase_error: error,
-          supabase_error_log: buildSupabaseErrorLog(error),
-        });
+        writeOperationalLog(
+          'error',
+          '[RENTAL_HISTORY_ADMIN_REJECT_ERROR]',
+          buildOperationalLogEntry({
+            category: 'database_operation_failed',
+            operation: 'update',
+            endpointKey: 'admin.rental_history_status',
+            error,
+          })
+        );
       }
-      console.error('[ADMIN_RENTAL_HISTORY_STATUS_ERROR]', error);
+      writeOperationalLog(
+        'error',
+        '[ADMIN_RENTAL_HISTORY_STATUS_ERROR]',
+        buildOperationalLogEntry({
+          category: 'database_operation_failed',
+          operation: 'update',
+          endpointKey: 'admin.rental_history_status',
+          error,
+        })
+      );
       res.status(500).json({
         success: false,
         message: 'Error interno del servidor',
@@ -9489,9 +9444,7 @@ app.get(
         },
       });
     } catch (err: any) {
-      console.error('[ADMIN_WOMPI_PAYMENTS]', {
-        error: err?.message || 'unknown',
-      });
+      logSanitizedError('[ADMIN_WOMPI_PAYMENTS]', 'select', 'admin.wompi_payments', err);
       res.status(500).json({
         success: false,
         message: 'No se pudo cargar el historial de pagos Wompi',
@@ -9615,10 +9568,7 @@ app.post(
         return;
       }
 
-      console.error('[ADMIN_WOMPI_VERIFY]', {
-        paymentId,
-        error: err?.message || 'unknown',
-      });
+      logSanitizedError('[ADMIN_WOMPI_VERIFY]', 'verify', 'admin.wompi_payment', err);
       res.status(500).json({
         success: false,
         message: 'No se pudo verificar el pago Wompi',
@@ -9862,7 +9812,7 @@ app.post(
         console.warn('[ADMIN_WOMPI_RECONCILE]', {
           paymentId: existingPayment.id,
           result: 'audit_log_failed',
-          error: auditError.message,
+          database_error_code: getDatabaseErrorCode(auditError),
         });
       }
 
@@ -9930,10 +9880,7 @@ app.post(
         return;
       }
 
-      console.error('[ADMIN_WOMPI_RECONCILE]', {
-        paymentId,
-        error: err?.message || 'unknown',
-      });
+      logSanitizedError('[ADMIN_WOMPI_RECONCILE]', 'reconcile', 'admin.wompi_payment', err);
       res.status(500).json({
         success: false,
         message: 'No se pudo reconciliar el pago Wompi',
@@ -10094,27 +10041,35 @@ app.get(
       ),
     ]);
 
-    const searches_today = getSettledNumber(searchesTodayResult);
-    const searches_7d = getSettledNumber(searches7dResult);
-    const unique_search_users_7d = getSettledNumber(uniqueSearchUsers7dResult);
-    const upgrade_clicks_7d = getSettledNumber(upgradeClicks7dResult);
-    const basic_clicks_7d = getSettledNumber(basicClicks7dResult);
-    const pro_clicks_7d = getSettledNumber(proClicks7dResult);
-    const enterprise_clicks_7d = getSettledNumber(enterpriseClicks7dResult);
-    const payments_created_7d = getSettledNumber(paymentsCreated7dResult);
-    const payments_pending_7d = getSettledNumber(paymentsPending7dResult);
-    const payments_approved_7d = getSettledNumber(paymentsApproved7dResult);
-    const payments_failed_7d = getSettledNumber(paymentsFailed7dResult);
-    const users_free = getSettledNumber(usersFreeResult);
-    const users_basic = getSettledNumber(usersBasicResult);
-    const users_pro = getSettledNumber(usersProResult);
-    const users_admin = getSettledNumber(usersAdminResult);
-    const identity_verifications_pending = getSettledNumber(identityVerificationsPendingResult);
-    const reports_pending = getSettledNumber(reportsPendingResult);
+    const searches_today = getSettledMetric(searchesTodayResult);
+    const searches_7d = getSettledMetric(searches7dResult);
+    const unique_search_users_7d = getSettledMetric(uniqueSearchUsers7dResult);
+    const upgrade_clicks_7d = getSettledMetric(upgradeClicks7dResult);
+    const basic_clicks_7d = getSettledMetric(basicClicks7dResult);
+    const pro_clicks_7d = getSettledMetric(proClicks7dResult);
+    const enterprise_clicks_7d = getSettledMetric(enterpriseClicks7dResult);
+    const payments_created_7d = getSettledMetric(paymentsCreated7dResult);
+    const payments_pending_7d = getSettledMetric(paymentsPending7dResult);
+    const payments_approved_7d = getSettledMetric(paymentsApproved7dResult);
+    const payments_failed_7d = getSettledMetric(paymentsFailed7dResult);
+    const users_free = getSettledMetric(usersFreeResult);
+    const users_basic = getSettledMetric(usersBasicResult);
+    const users_pro = getSettledMetric(usersProResult);
+    const users_admin = getSettledMetric(usersAdminResult);
+    const identity_verifications_pending = getSettledMetric(identityVerificationsPendingResult);
+    const reports_pending = getSettledMetric(reportsPendingResult);
 
-    const planClicks7d = basic_clicks_7d + pro_clicks_7d + enterprise_clicks_7d;
+    const planClicks7d =
+      basic_clicks_7d === null || pro_clicks_7d === null || enterprise_clicks_7d === null
+        ? null
+        : basic_clicks_7d + pro_clicks_7d + enterprise_clicks_7d;
     const paymentsTotal7d =
-      payments_created_7d + payments_pending_7d + payments_approved_7d + payments_failed_7d;
+      payments_created_7d === null ||
+      payments_pending_7d === null ||
+      payments_approved_7d === null ||
+      payments_failed_7d === null
+        ? null
+        : payments_created_7d + payments_pending_7d + payments_approved_7d + payments_failed_7d;
 
     const metrics = {
       searches_today,
@@ -10135,12 +10090,26 @@ app.get(
       identity_verifications_pending,
       reports_pending,
       conversion_search_to_upgrade_7d:
-        searches_7d > 0 ? roundPercentage((upgrade_clicks_7d / searches_7d) * 100) : 0,
+        searches_7d === null || upgrade_clicks_7d === null
+          ? null
+          : searches_7d > 0
+            ? roundPercentage((upgrade_clicks_7d / searches_7d) * 100)
+            : 0,
       conversion_upgrade_to_plan_click_7d:
-        upgrade_clicks_7d > 0 ? roundPercentage((planClicks7d / upgrade_clicks_7d) * 100) : 0,
+        upgrade_clicks_7d === null || planClicks7d === null
+          ? null
+          : upgrade_clicks_7d > 0
+            ? roundPercentage((planClicks7d / upgrade_clicks_7d) * 100)
+            : 0,
       payment_approval_rate_7d:
-        paymentsTotal7d > 0 ? roundPercentage((payments_approved_7d / paymentsTotal7d) * 100) : 0,
+        paymentsTotal7d === null || payments_approved_7d === null
+          ? null
+          : paymentsTotal7d > 0
+            ? roundPercentage((payments_approved_7d / paymentsTotal7d) * 100)
+            : 0,
     };
+
+    const partial = hasUnavailableMetric(metrics);
 
     console.log('[ADMIN_METRICS]', {
       searches_7d,
@@ -10151,6 +10120,7 @@ app.get(
 
     res.json({
       success: true,
+      partial,
       metrics,
     });
   }
@@ -10298,10 +10268,7 @@ app.get(
         },
       });
     } catch (error) {
-      console.error('[IDENTITY_VERIFICATION]', {
-        action: 'admin_list_error',
-        error: error instanceof Error ? error.message : 'unknown',
-      });
+      logSanitizedError('[IDENTITY_VERIFICATION]', 'select', 'admin.identity_verification', error);
       res.status(500).json({
         success: false,
         message: 'No se pudieron cargar las verificaciones de identidad',
@@ -10515,11 +10482,12 @@ app.patch(
         },
       });
     } catch (error) {
-      console.error('[IDENTITY_VERIFICATION]', {
-        action: 'admin_document_update_error',
-        document_id: req.params.documentId,
-        error: error instanceof Error ? error.message : 'unknown',
-      });
+      logSanitizedError(
+        '[IDENTITY_VERIFICATION]',
+        'update',
+        'admin.identity_document',
+        error
+      );
       res.status(500).json({
         success: false,
         message: 'No se pudo actualizar el documento de identidad',
@@ -10678,11 +10646,7 @@ app.patch(
         },
       });
     } catch (error) {
-      console.error('[IDENTITY_VERIFICATION]', {
-        action: 'admin_update_error',
-        user_id: req.params.userId,
-        error: error instanceof Error ? error.message : 'unknown',
-      });
+      logSanitizedError('[IDENTITY_VERIFICATION]', 'update', 'admin.identity_verification', error);
       res.status(500).json({
         success: false,
         message: 'No se pudo actualizar la verificacion de identidad',
@@ -10757,17 +10721,7 @@ app.get(
           .order('uploaded_at', { ascending: false });
 
         if (evidenceError) {
-          if (isMissingSchemaError(evidenceError)) {
-            logAdminEndpointError({
-              endpoint: '/api/admin/reports',
-              table: 'report_evidence_files',
-              operation: 'select',
-              error: evidenceError,
-              level: 'warn',
-            });
-          } else {
-            throw evidenceError;
-          }
+          throw evidenceError;
         } else {
           evidenceByReportId = ((evidenceFiles || []) as Array<Record<string, any>>).reduce(
             (acc, evidence) => {
@@ -10787,17 +10741,7 @@ app.get(
           .order('created_at', { ascending: false });
 
         if (reviewLogsError) {
-          if (isMissingSchemaError(reviewLogsError)) {
-            logAdminEndpointError({
-              endpoint: '/api/admin/reports',
-              table: 'report_review_logs',
-              operation: 'select',
-              error: reviewLogsError,
-              level: 'warn',
-            });
-          } else {
-            throw reviewLogsError;
-          }
+          throw reviewLogsError;
         } else {
           reviewLogsByReportId = (((reviewLogs || []) as unknown) as ReportReviewLogRow[]).reduce(
             (acc, log) => {
@@ -10816,17 +10760,7 @@ app.get(
           .order('created_at', { ascending: false });
 
         if (subjectNoticesError) {
-          if (isMissingSchemaError(subjectNoticesError)) {
-            logAdminEndpointError({
-              endpoint: '/api/admin/reports',
-              table: 'report_subject_notices',
-              operation: 'select',
-              error: subjectNoticesError,
-              level: 'warn',
-            });
-          } else {
-            throw subjectNoticesError;
-          }
+          throw subjectNoticesError;
         } else {
           subjectNoticesByReportId = (((subjectNotices || []) as unknown) as ReportSubjectNoticeRow[]).reduce(
             (acc, notice) => {
@@ -10856,10 +10790,8 @@ app.get(
       if (isMissingSchemaError(error)) {
         sendAdminMigrationRequired(res, {
           endpoint: '/api/admin/reports',
-          table: 'reports',
           operation: 'select',
           error,
-          message: 'Falta ejecutar la migracion de revision de reportes para cargar este modulo',
         });
         return;
       }
@@ -10953,19 +10885,11 @@ app.get(
         },
       });
     } catch (error) {
-      const page = clampNumber(parsePositiveInteger(req.query.page, 1), 1, 10000);
-      const pageSize = clampNumber(parsePositiveInteger(req.query.pageSize, 25), 1, 100);
-
       if (isMissingSchemaError(error)) {
-        sendAdminEmptyList(res, {
+        sendAdminMigrationRequired(res, {
           endpoint: '/api/admin/data-requests',
-          table: 'data_subject_requests',
           operation: 'select',
           error,
-          body: {
-            requests: [],
-            pagination: buildAdminPagination(page, pageSize),
-          },
         });
         return;
       }
@@ -11120,12 +11044,15 @@ app.patch(
         request: updatedRequest,
       });
     } catch (error) {
-      console.error('[DATA_SUBJECT_REQUESTS]', {
-        action: 'admin_update_error',
-        request_id: req.params.id,
-        admin_user_id: req.user?.id || null,
-        error: error instanceof Error ? error.message : 'unknown',
-      });
+      if (isMissingSchemaError(error)) {
+        sendAdminMigrationRequired(res, {
+          endpoint: '/api/admin/data-requests/:id',
+          operation: 'update',
+          error,
+        });
+        return;
+      }
+      logSanitizedError('[DATA_SUBJECT_REQUESTS]', 'update', 'admin.data_request', error);
       res.status(500).json({
         success: false,
         message: 'No se pudo actualizar la solicitud',
@@ -11190,19 +11117,11 @@ app.get(
         },
       });
     } catch (error) {
-      const page = clampNumber(parsePositiveInteger(req.query.page, 1), 1, 10000);
-      const pageSize = clampNumber(parsePositiveInteger(req.query.pageSize, 25), 1, 100);
-
       if (isMissingSchemaError(error)) {
-        sendAdminEmptyList(res, {
+        sendAdminMigrationRequired(res, {
           endpoint: '/api/admin/human-review-requests',
-          table: 'human_review_requests',
           operation: 'select',
           error,
-          body: {
-            requests: [],
-            pagination: buildAdminPagination(page, pageSize),
-          },
         });
         return;
       }
@@ -11348,12 +11267,15 @@ app.patch(
         request: updatedRequest,
       });
     } catch (error) {
-      console.error('[HUMAN_REVIEW_REQUESTS]', {
-        action: 'admin_update_error',
-        request_id: req.params.id,
-        admin_user_id: req.user?.id || null,
-        error: error instanceof Error ? error.message : 'unknown',
-      });
+      if (isMissingSchemaError(error)) {
+        sendAdminMigrationRequired(res, {
+          endpoint: '/api/admin/human-review-requests/:id',
+          operation: 'update',
+          error,
+        });
+        return;
+      }
+      logSanitizedError('[HUMAN_REVIEW_REQUESTS]', 'update', 'admin.human_review', error);
       res.status(500).json({
         success: false,
         message: 'No se pudo actualizar la solicitud de revision humana',
@@ -11427,19 +11349,11 @@ app.get(
         },
       });
     } catch (error) {
-      const page = clampNumber(parsePositiveInteger(req.query.page, 1), 1, 10000);
-      const pageSize = clampNumber(parsePositiveInteger(req.query.pageSize, 25), 1, 100);
-
       if (isMissingSchemaError(error)) {
-        sendAdminEmptyList(res, {
+        sendAdminMigrationRequired(res, {
           endpoint: '/api/admin/disputes',
-          table: 'data_disputes',
           operation: 'select',
           error,
-          body: {
-            disputes: [],
-            pagination: buildAdminPagination(page, pageSize),
-          },
         });
         return;
       }
@@ -11618,12 +11532,15 @@ app.patch(
         dispute: updatedDispute,
       });
     } catch (error) {
-      console.error('[DATA_DISPUTES]', {
-        action: 'admin_update_error',
-        dispute_id: req.params.id,
-        admin_user_id: req.user?.id || null,
-        error: error instanceof Error ? error.message : 'unknown',
-      });
+      if (isMissingSchemaError(error)) {
+        sendAdminMigrationRequired(res, {
+          endpoint: '/api/admin/disputes/:id',
+          operation: 'update',
+          error,
+        });
+        return;
+      }
+      logSanitizedError('[DATA_DISPUTES]', 'update', 'admin.data_dispute', error);
       res.status(500).json({
         success: false,
         message: 'No se pudo actualizar la disputa',
@@ -11732,19 +11649,11 @@ app.get(
         },
       });
     } catch (error) {
-      const page = clampNumber(parsePositiveInteger(req.query.page, 1), 1, 10000);
-      const pageSize = clampNumber(parsePositiveInteger(req.query.pageSize, 25), 1, 100);
-
       if (isMissingSchemaError(error)) {
-        sendAdminEmptyList(res, {
+        sendAdminMigrationRequired(res, {
           endpoint: '/api/admin/data-inventory',
-          table: 'data_inventory_items',
           operation: 'select',
           error,
-          body: {
-            items: [],
-            pagination: buildAdminPagination(page, pageSize),
-          },
         });
         return;
       }
@@ -11825,12 +11734,15 @@ app.post(
         item,
       });
     } catch (error: any) {
-      console.error('[DATA_INVENTORY]', {
-        action: 'create_error',
-        admin_user_id: req.user?.id || null,
-        error: error instanceof Error ? error.message : 'unknown',
-        code: error?.code || null,
-      });
+      if (isMissingSchemaError(error)) {
+        sendAdminMigrationRequired(res, {
+          endpoint: '/api/admin/data-inventory',
+          operation: 'insert',
+          error,
+        });
+        return;
+      }
+      logSanitizedError('[DATA_INVENTORY]', 'insert', 'admin.data_inventory', error);
       res.status(error?.code === '23505' ? 409 : 500).json({
         success: false,
         message:
@@ -11929,13 +11841,15 @@ app.patch(
         item: data as unknown as DataInventoryItemRow,
       });
     } catch (error: any) {
-      console.error('[DATA_INVENTORY]', {
-        action: 'update_error',
-        admin_user_id: req.user?.id || null,
-        item_id: req.params.id,
-        error: error instanceof Error ? error.message : 'unknown',
-        code: error?.code || null,
-      });
+      if (isMissingSchemaError(error)) {
+        sendAdminMigrationRequired(res, {
+          endpoint: '/api/admin/data-inventory/:id',
+          operation: 'update',
+          error,
+        });
+        return;
+      }
+      logSanitizedError('[DATA_INVENTORY]', 'update', 'admin.data_inventory', error);
       res.status(error?.code === '23505' ? 409 : 500).json({
         success: false,
         message:
@@ -12005,11 +11919,7 @@ app.get(
         },
       });
     } catch (error) {
-      console.error('[ADMIN_AUDIT]', {
-        action: 'admin_list_error',
-        admin_user_id: req.user?.id || null,
-        error: error instanceof Error ? error.message : 'unknown',
-      });
+      logSanitizedError('[ADMIN_AUDIT]', 'select', 'admin.audit', error);
       res.status(500).json({
         success: false,
         message: 'No se pudo cargar la auditoria administrativa',
@@ -12084,7 +11994,7 @@ app.get(
         .order('created_at', { ascending: false })
         .limit(100);
 
-      if (auditError && !isMissingSchemaError(auditError)) {
+      if (auditError) {
         throw auditError;
       }
 
@@ -12125,7 +12035,7 @@ app.get(
         .order('created_at', { ascending: false })
         .limit(100);
 
-      if (reviewLogError && !isMissingSchemaError(reviewLogError)) {
+      if (reviewLogError) {
         throw reviewLogError;
       }
 
@@ -12314,14 +12224,10 @@ app.get(
       });
     } catch (error) {
       if (isMissingSchemaError(error)) {
-        sendAdminEmptyList(res, {
+        sendAdminMigrationRequired(res, {
           endpoint: '/api/admin/report-actions',
-          table: 'admin_report_actions',
           operation: 'select',
           error,
-          body: {
-            actions: [],
-          },
         });
         return;
       }
@@ -12370,14 +12276,10 @@ app.get(
       });
     } catch (error) {
       if (isMissingSchemaError(error)) {
-        sendAdminEmptyList(res, {
+        sendAdminMigrationRequired(res, {
           endpoint: '/api/admin/legal-case-signals',
-          table: 'legal_case_signals',
           operation: 'select',
           error,
-          body: {
-            signals: [],
-          },
         });
         return;
       }
@@ -12544,7 +12446,7 @@ app.patch(
             );
           }
         } catch (scoreError) {
-          console.error('⚠️ Error recalculando score desde legal_case_signals:', scoreError);
+          logSanitizedError('[LEGAL_SIGNAL_SCORE_ERROR]', 'recalculate', 'admin.legal_signal', scoreError);
           res.status(500).json({
             success: false,
             message: 'La señal fue actualizada, pero falló el recálculo automático del score',
@@ -12601,7 +12503,15 @@ app.patch(
         signal: updatedSignalRow,
       });
     } catch (error) {
-      console.error('Error al actualizar legal_case_signal:', error);
+      if (isMissingSchemaError(error)) {
+        sendAdminMigrationRequired(res, {
+          endpoint: '/api/admin/legal-case-signals/:id',
+          operation: 'update',
+          error,
+        });
+        return;
+      }
+      logSanitizedError('[LEGAL_SIGNAL_UPDATE_ERROR]', 'update', 'admin.legal_signal', error);
       res.status(500).json({
         success: false,
         message: 'Error interno',
@@ -12714,12 +12624,7 @@ app.patch(
         report: report as unknown as AdminReportRow,
       });
     } catch (error) {
-      console.error('[LEGAL_TRACEABILITY]', {
-        action: 'report_trace_update_error',
-        report_id: req.params.id,
-        admin_user_id: req.user?.id || null,
-        error: error instanceof Error ? error.message : 'unknown',
-      });
+      logSanitizedError('[LEGAL_TRACEABILITY]', 'update', 'admin.report_trace', error);
       res.status(500).json({
         success: false,
         message: 'No se pudo actualizar la trazabilidad del reporte',
@@ -12924,13 +12829,16 @@ app.patch(
         .maybeSingle();
 
       if (reportActionError) {
-        console.error('[REPORT_REVIEW_ACTION_LOG_ERROR]', {
-          report_id: id,
-          admin_user_id: adminUserId,
-          action,
-          supabase_error: reportActionError,
-          supabase_error_log: buildSupabaseErrorLog(reportActionError),
-        });
+        writeOperationalLog(
+          'error',
+          '[REPORT_REVIEW_ACTION_LOG_ERROR]',
+          buildOperationalLogEntry({
+            category: 'audit_insert_failed',
+            operation: 'insert',
+            endpointKey: 'admin.report_review_action',
+            error: reportActionError,
+          })
+        );
       }
 
       const { data: reviewLogs, error: reviewLogsError } = await supabase
@@ -13017,12 +12925,7 @@ app.patch(
         report: reportRow,
       });
     } catch (error) {
-      console.error('[REPORT_REVIEW]', {
-        action: 'review_update_error',
-        report_id: req.params.id,
-        admin_user_id: req.user?.id || null,
-        error: error instanceof Error ? error.message : 'unknown',
-      });
+      logSanitizedError('[REPORT_REVIEW]', 'update', 'admin.report_review', error);
       await logLegalReportAudit({
         report_id: req.params.id,
         actor_user_id: req.user?.id || null,
@@ -13343,12 +13246,7 @@ app.post(
         },
       });
     } catch (error) {
-      console.error('[REPORT_NOTICE]', {
-        action: 'notice_update_error',
-        report_id: req.params.id,
-        admin_user_id: req.user?.id || null,
-        error: error instanceof Error ? error.message : 'unknown',
-      });
+      logSanitizedError('[REPORT_NOTICE]', 'update', 'admin.report_notice', error);
       await logLegalReportAudit({
         report_id: req.params.id,
         actor_user_id: req.user?.id || null,
@@ -13496,7 +13394,7 @@ app.put(
         .maybeSingle();
 
       if (auditError) {
-        console.error('⚠️ Error guardando auditoría admin:', auditError);
+        logSanitizedError('[ADMIN_AUDIT_ERROR]', 'insert', 'admin.audit', auditError);
       }
 
       const { error: reviewLogError } = await supabase
@@ -13539,7 +13437,7 @@ app.put(
             });
           }
         } catch (scoreRecalcError) {
-          console.error('Error registrando aprobacion heredada sin recalculo de score:', scoreRecalcError);
+          logSanitizedError('[REPORT_LEGACY_SCORE_ERROR]', 'recalculate', 'admin.report', scoreRecalcError);
         }
       }
 
@@ -13604,7 +13502,7 @@ app.put(
         report: reportRow,
       });
     } catch (error) {
-      console.error('Error al actualizar reporte:', error);
+      logSanitizedError('[REPORT_UPDATE_ERROR]', 'update', 'admin.report', error);
       await logLegalReportAudit({
         report_id: req.params.id,
         actor_user_id: req.user?.id || null,
@@ -13636,7 +13534,16 @@ app.use((req: Request, res: Response) => {
 });
 
 app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
-  console.error('Error no controlado:', err);
+  writeOperationalLog(
+    'error',
+    '[UNHANDLED_ERROR]',
+    buildOperationalLogEntry({
+      category: 'unhandled_error',
+      operation: 'request',
+      endpointKey: 'unknown',
+      error: err,
+    })
+  );
   res.status(500).json({
     success: false,
     message: 'Error interno del servidor',
@@ -13655,6 +13562,6 @@ app.listen(Number(PORT), async () => {
     if (error) throw error;
     console.log('✅ Conexión a Supabase establecida');
   } catch (err) {
-    console.error('❌ Error conectando a Supabase:', err);
+    logSanitizedError('[SUPABASE_CONNECTION_ERROR]', 'connect', 'supabase', err);
   }
 });

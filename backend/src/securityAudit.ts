@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { buildOperationalLogEntry, writeOperationalLog } from './lib/adminOperationalSafety';
 
 export async function logSecurityEvent(
   supabase: SupabaseClient,
@@ -15,6 +16,15 @@ export async function logSecurityEvent(
       organization_id: organizationId ?? null
     });
   } catch (err) {
-    console.error('security_events insert failed:', err);
+    writeOperationalLog(
+      'error',
+      '[SECURITY_AUDIT_ERROR]',
+      buildOperationalLogEntry({
+        category: 'audit_insert_failed',
+        operation: 'insert',
+        endpointKey: 'security_events',
+        error: err,
+      })
+    );
   }
 }

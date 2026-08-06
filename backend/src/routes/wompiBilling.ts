@@ -13,6 +13,10 @@ import {
   getWompiPublicKey,
 } from '../lib/wompi';
 import { getPlanActivationDecision } from '../lib/emailVerificationPolicy';
+import {
+  buildOperationalLogEntry,
+  writeOperationalLog,
+} from '../lib/adminOperationalSafety';
 
 type AuthenticatedRequest = Request & {
   user?: {
@@ -320,18 +324,28 @@ async function insertPlanChangeAudit(params: {
       });
 
     if (error) {
-      console.error('[WOMPI_WEBHOOK_ERROR]', {
-        reason: 'audit_insert_failed',
-        paymentId: params.payment.id,
-        message: error.message,
-      });
+      writeOperationalLog(
+        'error',
+        '[WOMPI_WEBHOOK_ERROR]',
+        buildOperationalLogEntry({
+          category: 'audit_insert_failed',
+          operation: 'insert',
+          endpointKey: 'wompi.webhook_audit',
+          error,
+        })
+      );
     }
   } catch (error) {
-    console.error('[WOMPI_WEBHOOK_ERROR]', {
-      reason: 'audit_insert_exception',
-      paymentId: params.payment.id,
-      message: error instanceof Error ? error.message : 'unknown',
-    });
+    writeOperationalLog(
+      'error',
+      '[WOMPI_WEBHOOK_ERROR]',
+      buildOperationalLogEntry({
+        category: 'audit_insert_exception',
+        operation: 'insert',
+        endpointKey: 'wompi.webhook_audit',
+        error,
+      })
+    );
   }
 }
 
@@ -421,7 +435,16 @@ wompiBillingRouter.post('/create-wompi-checkout', async (req: AuthenticatedReque
       },
     });
   } catch (error) {
-    console.error('[wompi_billing] Error creando checkout:', error);
+    writeOperationalLog(
+      'error',
+      '[WOMPI_CHECKOUT_ERROR]',
+      buildOperationalLogEntry({
+        category: 'checkout_create_failed',
+        operation: 'create',
+        endpointKey: 'wompi.checkout',
+        error,
+      })
+    );
     res.status(500).json({
       success: false,
       message: 'No se pudo iniciar el pago. Intenta nuevamente.',
@@ -611,10 +634,16 @@ export async function wompiWebhookHandler(req: Request, res: Response): Promise<
 
     res.status(200).json({ success: true, received: true });
   } catch (error) {
-    console.error('[WOMPI_WEBHOOK_ERROR]', {
-      reason: 'internal_error',
-      message: error instanceof Error ? error.message : 'unknown',
-    });
+    writeOperationalLog(
+      'error',
+      '[WOMPI_WEBHOOK_ERROR]',
+      buildOperationalLogEntry({
+        category: 'webhook_processing_failed',
+        operation: 'process',
+        endpointKey: 'wompi.webhook',
+        error,
+      })
+    );
     res.status(500).json({ success: false, message: 'Internal webhook error' });
   }
 }

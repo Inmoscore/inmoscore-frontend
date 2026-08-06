@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   IdentityVerificationActionController,
   type IdentityVerificationActionDependencies,
+  type IdentityVerificationPatchResult,
   type PendingIdentityVerificationAction,
 } from "./identityVerificationAction.ts";
 
