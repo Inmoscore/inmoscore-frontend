@@ -4,6 +4,7 @@ import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import dotenv from 'dotenv';
 import dns from 'dns';
+import { randomUUID } from 'crypto';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { z } from 'zod';
@@ -72,6 +73,17 @@ import {
   isRestrictedSessionAllowed,
   requireConfirmedEmailSession,
 } from './lib/emailVerificationPolicy';
+import {
+  DATA_SUBJECT_REQUEST_STATUSES,
+  DATA_SUBJECT_REQUEST_TYPES,
+  DataSubjectRequestRow,
+  DataSubjectRequestStatus,
+  DataSubjectRequestType,
+  adminDataSubjectRequestUpdateSchema,
+  buildDataSubjectRequestCreatePayload,
+  dataSubjectRequestCreateSchema,
+  updateDataSubjectRequest,
+} from './lib/dataSubjectRequests';
 
 function logSanitizedError(event: string, operation: string, endpointKey: string, error: unknown): void {
   writeOperationalLog(
@@ -583,39 +595,6 @@ type SearchAuditRequestContext = {
   requestId: string | null;
 };
 
-type DataSubjectRequestType =
-  | 'access'
-  | 'correction'
-  | 'deletion'
-  | 'authorization_revocation'
-  | 'claim'
-  | 'other';
-
-type DataSubjectRequestStatus =
-  | 'received'
-  | 'in_review'
-  | 'awaiting_user_info'
-  | 'resolved'
-  | 'rejected';
-
-type DataSubjectRequestRow = {
-  id: string;
-  user_id: string | null;
-  requester_email: string;
-  requester_name: string | null;
-  requester_document_id: string | null;
-  request_type: DataSubjectRequestType;
-  status: DataSubjectRequestStatus;
-  description: string;
-  admin_notes: string | null;
-  submitted_at: string;
-  due_at: string;
-  resolved_at: string | null;
-  resolved_by: string | null;
-  created_at: string;
-  updated_at: string;
-};
-
 type DataDisputeTargetType =
   | 'report'
   | 'judicial_signal'
@@ -845,23 +824,6 @@ type AdminAuditLogRow = {
 // ================================
 // VALIDATIONS
 // ================================
-
-const DATA_SUBJECT_REQUEST_TYPES = [
-  'access',
-  'correction',
-  'deletion',
-  'authorization_revocation',
-  'claim',
-  'other',
-] as const;
-
-const DATA_SUBJECT_REQUEST_STATUSES = [
-  'received',
-  'in_review',
-  'awaiting_user_info',
-  'resolved',
-  'rejected',
-] as const;
 
 const DATA_DISPUTE_TARGET_TYPES = [
   'report',
@@ -1384,14 +1346,6 @@ const legalAcceptancesBodySchema = z
     }
   });
 
-const dataSubjectRequestCreateSchema = z.object({
-  requester_email: z.string().trim().email('Email invalido').max(180),
-  requester_name: z.string().trim().max(150).optional().nullable(),
-  requester_document_id: z.string().trim().max(80).optional().nullable(),
-  request_type: z.enum(DATA_SUBJECT_REQUEST_TYPES),
-  description: z.string().trim().min(20, 'La descripcion debe tener al menos 20 caracteres').max(2000),
-});
-
 const dataDisputeCreateSchema = z
   .object({
     requester_email: z.string().trim().email('Email invalido').max(180),
@@ -1423,13 +1377,6 @@ const humanReviewRequestCreateSchema = z
     reason: z.enum(HUMAN_REVIEW_REQUEST_REASONS),
     description: z.string().trim().min(20, 'La descripcion debe tener al menos 20 caracteres').max(2500),
     secure_document_ids: z.array(z.string().uuid('secure_document_id invalido')).max(5).optional().default([]),
-  })
-  .strict();
-
-const adminDataSubjectRequestUpdateSchema = z
-  .object({
-    status: z.enum(DATA_SUBJECT_REQUEST_STATUSES).optional(),
-    admin_notes: z.string().trim().max(2000).optional().nullable(),
   })
   .strict();
 
@@ -1881,6 +1828,17 @@ const limiter = rateLimit({
 });
 
 app.use(limiter);
+
+const dataSubjectRequestCreateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: 'Demasiadas solicitudes. Intenta nuevamente mas tarde.',
+  },
+});
 
 app.use((req: EmailVerificationRequest, res: Response, next: NextFunction) => {
   if (!req.path.startsWith('/api/') || isRestrictedSessionAllowed(req.method, req.path)) {
@@ -2443,15 +2401,6 @@ function getOptionalAuthenticatedUser(req: Request): JwtPayload | null {
   } catch {
     return null;
   }
-}
-
-function calculateDataSubjectRequestDueAt(requestType: DataSubjectRequestType): string {
-  const dueAt = new Date();
-  // Foundation phase: simple calendar-day approximation. Replace with a Colombian
-  // business-day calculator before final legal SLA automation.
-  const calendarDays = requestType === 'access' ? 10 : 15;
-  dueAt.setDate(dueAt.getDate() + calendarDays);
-  return dueAt.toISOString();
 }
 
 function calculateDataDisputeDueAt(): string {
@@ -4775,67 +4724,76 @@ app.post('/api/legal/acceptances', authenticateToken, async (req: AuthRequest, r
   }
 });
 
-app.post('/api/legal/data-requests', async (req: Request, res: Response) => {
-  try {
-    const parsed = dataSubjectRequestCreateSchema.safeParse(req.body ?? {});
+app.post(
+  '/api/legal/data-requests',
+  dataSubjectRequestCreateLimiter,
+  async (req: Request, res: Response) => {
+    try {
+      const optionalUser = getOptionalAuthenticatedUser(req);
+      const hasAuthorizationHeader = Boolean(req.headers.authorization);
+      if (hasAuthorizationHeader && !optionalUser) {
+        res.status(403).json({
+          success: false,
+          message: 'Token invalido',
+        });
+        return;
+      }
 
-    if (!parsed.success) {
-      res.status(400).json({
-        success: false,
-        message: 'Datos de solicitud invalidos',
-        errors: parsed.error.flatten(),
+      const requestBody = optionalUser
+        ? { ...(req.body ?? {}), requester_email: optionalUser.email }
+        : (req.body ?? {});
+      const parsed = dataSubjectRequestCreateSchema.safeParse(requestBody);
+
+      if (!parsed.success) {
+        res.status(400).json({
+          success: false,
+          message: 'Datos de solicitud invalidos',
+          errors: parsed.error.flatten(),
+        });
+        return;
+      }
+
+      const submittedAt = new Date();
+      const createPayload = buildDataSubjectRequestCreatePayload({
+        data: parsed.data,
+        identity: optionalUser
+          ? { userId: optionalUser.id, email: optionalUser.email }
+          : null,
+        submittedAt,
+        ipAddress: getRequestIp(req) || req.socket.remoteAddress || null,
+        userAgent: getRequestUserAgent(req),
       });
-      return;
-    }
 
-    const optionalUser = getOptionalAuthenticatedUser(req);
-    const submittedAt = new Date().toISOString();
-    const dueAt = calculateDataSubjectRequestDueAt(parsed.data.request_type);
+      const { data, error } = await supabase
+        .from('data_subject_requests')
+        .insert(createPayload)
+        .select('id, status, submitted_at, due_at')
+        .single();
 
-    const { data, error } = await supabase
-      .from('data_subject_requests')
-      .insert({
-        user_id: optionalUser?.id || null,
-        requester_email: parsed.data.requester_email.toLowerCase(),
-        requester_name: normalizeNullableText(parsed.data.requester_name, 150),
-        requester_document_id: normalizeNullableText(parsed.data.requester_document_id, 80),
+      if (error || !data) {
+        throw error || new Error('No se pudo crear la solicitud');
+      }
+
+      console.log('[DATA_SUBJECT_REQUESTS]', {
+        action: 'created',
+        request_id: data.id,
         request_type: parsed.data.request_type,
-        status: 'received',
-        description: parsed.data.description,
-        submitted_at: submittedAt,
-        due_at: dueAt,
-        ip_address: getRequestIp(req) || req.socket.remoteAddress || null,
-        user_agent: getRequestUserAgent(req),
-      })
-      .select('id, status, submitted_at, due_at')
-      .single();
+        authenticated: Boolean(optionalUser?.id),
+      });
 
-    if (error || !data) {
-      throw error || new Error('No se pudo crear la solicitud');
+      res.status(201).json({
+        success: true,
+        request: data,
+      });
+    } catch (error) {
+      logSanitizedError('[DATA_SUBJECT_REQUESTS]', 'insert', 'legal.data_requests', error);
+      res.status(500).json({
+        success: false,
+        message: 'No se pudo registrar la solicitud',
+      });
     }
-
-    console.log('[DATA_SUBJECT_REQUESTS]', {
-      action: 'created',
-      request_id: data.id,
-      request_type: parsed.data.request_type,
-      authenticated: Boolean(optionalUser?.id),
-    });
-
-    res.status(201).json({
-      success: true,
-      request: data,
-    });
-  } catch (error) {
-    console.error('[DATA_SUBJECT_REQUESTS]', {
-      action: 'create_error',
-      error: error instanceof Error ? error.message : 'unknown',
-    });
-    res.status(500).json({
-      success: false,
-      message: 'No se pudo registrar la solicitud',
-    });
   }
-});
+);
 
 app.get('/api/legal/data-requests/my', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
@@ -4852,7 +4810,7 @@ app.get('/api/legal/data-requests/my', authenticateToken, async (req: AuthReques
       .select(
         'id, requester_email, requester_name, request_type, status, description, submitted_at, due_at, resolved_at, created_at, updated_at'
       )
-      .or(`user_id.eq.${req.user.id},requester_email.eq.${req.user.email.toLowerCase()}`)
+      .eq('user_id', req.user.id)
       .order('submitted_at', { ascending: false })
       .limit(100);
 
@@ -4865,11 +4823,7 @@ app.get('/api/legal/data-requests/my', authenticateToken, async (req: AuthReques
       requests: data || [],
     });
   } catch (error) {
-    console.error('[DATA_SUBJECT_REQUESTS]', {
-      action: 'my_list_error',
-      user_id: req.user?.id || null,
-      error: error instanceof Error ? error.message : 'unknown',
-    });
+    logSanitizedError('[DATA_SUBJECT_REQUESTS]', 'select', 'legal.my_data_requests', error);
     res.status(500).json({
       success: false,
       message: 'No se pudieron cargar las solicitudes',
@@ -10935,17 +10889,51 @@ app.patch(
         return;
       }
 
-      const { data: existingRequest, error: existingError } = await supabase
-        .from('data_subject_requests')
-        .select('id, status')
-        .eq('id', id)
-        .maybeSingle();
+      const result = await updateDataSubjectRequest({
+        id,
+        data: parsed.data,
+        adminUserId: req.user?.id || null,
+        findById: async (requestId) => {
+          const { data, error } = await supabase
+            .from('data_subject_requests')
+            .select('id, status')
+            .eq('id', requestId)
+            .maybeSingle();
+          if (error) throw error;
+          return data as { id: string; status: DataSubjectRequestStatus } | null;
+        },
+        updateById: async (requestId, updatePayload, expectedStatus) => {
+          const { data, error } = await supabase
+            .from('data_subject_requests')
+            .update(updatePayload)
+            .eq('id', requestId)
+            .eq('status', expectedStatus)
+            .select(
+              [
+                'id',
+                'user_id',
+                'requester_email',
+                'requester_name',
+                'requester_document_id',
+                'request_type',
+                'status',
+                'description',
+                'admin_notes',
+                'submitted_at',
+                'due_at',
+                'resolved_at',
+                'resolved_by',
+                'created_at',
+                'updated_at',
+              ].join(', ')
+            )
+            .maybeSingle();
+          if (error) throw error;
+          return data as unknown as DataSubjectRequestRow | null;
+        },
+      });
 
-      if (existingError) {
-        throw existingError;
-      }
-
-      if (!existingRequest) {
+      if (result.kind === 'not_found') {
         res.status(404).json({
           success: false,
           message: 'Solicitud no encontrada',
@@ -10953,90 +10941,57 @@ app.patch(
         return;
       }
 
-      const nowISO = new Date().toISOString();
-      const updatePayload: Record<string, unknown> = {
-        updated_at: nowISO,
-      };
-
-      if (parsed.data.status) {
-        updatePayload.status = parsed.data.status;
-
-        if (parsed.data.status === 'resolved' || parsed.data.status === 'rejected') {
-          updatePayload.resolved_at = nowISO;
-          updatePayload.resolved_by = req.user?.id || null;
-        }
+      if (result.kind === 'invalid_transition' || result.kind === 'state_conflict') {
+        res.status(409).json({
+          success: false,
+          code: 'INVALID_STATUS_TRANSITION',
+          message:
+            result.kind === 'invalid_transition' && result.reason === 'reopen_note_required'
+              ? 'La reapertura requiere una justificacion.'
+              : 'La transicion de estado solicitada no esta permitida.',
+        });
+        return;
       }
 
-      if (parsed.data.admin_notes !== undefined) {
-        updatePayload.admin_notes = normalizeNullableText(parsed.data.admin_notes, 2000);
-      }
-
-      const { data, error } = await supabase
-        .from('data_subject_requests')
-        .update(updatePayload)
-        .eq('id', id)
-        .select(
-          [
-            'id',
-            'user_id',
-            'requester_email',
-            'requester_name',
-            'requester_document_id',
-            'request_type',
-            'status',
-            'description',
-            'admin_notes',
-            'submitted_at',
-            'due_at',
-            'resolved_at',
-            'resolved_by',
-            'created_at',
-            'updated_at',
-          ].join(', ')
-        )
-        .single();
-
-      if (error || !data) {
-        throw error || new Error('No se pudo actualizar la solicitud');
-      }
-
-      const updatedRequest = data as unknown as DataSubjectRequestRow;
+      const updatedRequest = result.request;
+      const correlationId = randomUUID();
 
       console.log('[DATA_SUBJECT_REQUESTS]', {
         action: 'admin_updated',
         request_id: id,
-        previous_status: existingRequest.status,
+        correlation_id: correlationId,
+        operation: result.operation,
+        previous_status: result.previousStatus,
         next_status: updatedRequest.status,
         admin_user_id: req.user?.id || null,
       });
 
       await logAdminAction({
-        ...buildAdminAuditContext(req),
-        action_type:
-          updatedRequest.status === 'resolved'
-            ? 'data_request.resolve'
-            : updatedRequest.status === 'rejected'
-              ? 'data_request.reject'
-              : 'data_request.update',
+        admin: {
+          id: req.user?.id || null,
+        },
+        action_type: `data_request.${result.operation}`,
         severity:
-          updatedRequest.status === 'resolved' || updatedRequest.status === 'rejected'
+          result.operation === 'resolve' ||
+          result.operation === 'reject' ||
+          result.operation === 'reopen'
             ? 'high'
             : 'medium',
         target: {
           type: 'data_subject_request',
           id,
-          reference: updatedRequest.requester_email,
         },
         previous_state: {
-          status: existingRequest.status,
+          status: result.previousStatus,
         },
         new_state: {
           status: updatedRequest.status,
-          request_type: updatedRequest.request_type,
-          resolved_at: updatedRequest.resolved_at,
-          resolved_by: updatedRequest.resolved_by,
+          operation: result.operation,
+          admin_user_id: req.user?.id || null,
         },
-        reason: updatedRequest.admin_notes,
+        request: {
+          request_id: correlationId,
+        },
       });
 
       res.json({
