@@ -79,6 +79,16 @@ Pagos:
 - `migration_human_review_requests.sql`
 - `migration_data_inventory.sql`
 - `migration_data_origin_traceability.sql`
+- `migration_phase2b_data_disputes_hardened.sql`
+- `migration_phase2b_human_review_requests_hardened.sql`
+- `migration_phase2b_data_inventory_hardened.sql`
+- `migration_phase2b_legal_case_signals_reconciliation.sql`
+- `preflight_phase2b_legal_modules.sql`
+- `postcheck_phase2b_legal_modules.sql`
+- `backend/preflight_legal_case_signals_acl_hardening.sql`
+- `backend/migration_phase2b_legal_case_signals_acl_hardening.sql`
+- `backend/postcheck_legal_case_signals_acl_hardening.sql`
+- `backend/rollback_legal_case_signals_acl_hardening.sql` (solo contingencia; no es un paso normal)
 - `migration_phase1_organization_id.sql`
 - `migration_phase2_multitenant_hardening.sql`
 - `migration_admin_audit_trail.sql`
@@ -99,7 +109,8 @@ Pagos:
 - Toda migracion debe ser idempotente.
 - Preferir `create table if not exists`.
 - Preferir `alter table ... add column if not exists`.
-- Usar `drop constraint if exists` antes de recrear constraints cuando sea necesario.
+- Validar enums con `enumlabel::text`, columnas, constraints, indices, funciones y triggers antes de converger.
+- Ante un objeto incompatible, abortar la transaccion; no eliminar ni recrear silenciosamente objetos productivos.
 - No asumir entorno limpio.
 - No borrar datos productivos sin plan, respaldo y aprobacion.
 - Documentar nuevas tablas, columnas criticas y efectos en este archivo.
@@ -108,6 +119,12 @@ Pagos:
 ## Reglas de datos legales
 
 - Datos que impactan scoring deben tener origen y base legal cuando aplique.
+- `data_disputes`, `human_review_requests` y `data_inventory_items` son backend-only: RLS habilitado y forzado, sin policies de cliente y sin privilegio `DELETE` para `service_role`.
+- La migracion Phase 2B de inventario es solo estructural: una tabla vacia es valida y los doce seeds legacy no se ejecutan.
+- La reconciliacion estructural Phase 2B de `legal_case_signals` agrega/valida solo los once campos de trazabilidad faltantes y conserva las ACL durante ese paso.
+- El hardening ACL/RLS posterior de `public.legal_case_signals` fue ejecutado y validado en produccion: RLS habilitado y forzado, cero policies, `PUBLIC`/`anon`/`authenticated` sin privilegios y `service_role` con unicamente `SELECT`, `INSERT` y `UPDATE`. `service_role` no tiene `DELETE`, `TRUNCATE`, `REFERENCES`, `TRIGGER` ni `MAINTAIN`, conserva `rolbypassrls = true` y el post-check concluyo `VERIFIED` con `failures: []`.
+- `backend/rollback_legal_case_signals_acl_hardening.sql` restaura el baseline anterior solo como mecanismo de contingencia y no forma parte del flujo normal.
+- La validacion funcional productiva confirmo que Admin Senales judiciales carga, la busqueda por cedula y scoring funcionan, una senal existente pudo actualizarse administrativamente, los contadores administrativos se actualizaron y Disputas carga correctamente en estado vacio. No se probo una disputa real vinculada a `judicial_signal`.
 - Reportes deben conservar evidencia y estado de revision.
 - Disputas, solicitudes de datos y revision humana deben mantener trazabilidad.
 - Accesos a documentos sensibles deben quedar registrados.

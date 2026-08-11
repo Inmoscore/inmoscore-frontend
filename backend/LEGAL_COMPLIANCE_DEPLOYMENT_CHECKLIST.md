@@ -17,6 +17,45 @@ Aplicar en este orden, sobre la misma base de datos Supabase:
 
 No desplegar frontend/backend que dependan de estas tablas antes de aplicar las migraciones correspondientes.
 
+### Fase 2B endurecida
+
+Para instalaciones donde las migraciones legacy no fueron aplicadas, usar este orden y no mezclarlo con la ejecucion posterior de las cuatro migraciones legacy equivalentes:
+
+1. Ejecutar `preflight_phase2b_legal_modules.sql` (solo lectura) y revisar objetos incompatibles y ACL.
+2. Ejecutar `migration_phase2b_data_disputes_hardened.sql`.
+3. Ejecutar `postcheck_phase2b_legal_modules.sql`; `data_disputes` debe quedar `VERIFIED` aunque otros modulos indiquen `NOT_INSTALLED`.
+4. Ejecutar `migration_phase2b_human_review_requests_hardened.sql` y repetir el post-check.
+5. Ejecutar `migration_phase2b_data_inventory_hardened.sql` y repetir el post-check. La tabla vacia es valida; no hay seeds.
+6. Ejecutar `migration_phase2b_legal_case_signals_reconciliation.sql` y repetir el post-check.
+7. Ejecutar `backend/preflight_legal_case_signals_acl_hardening.sql` (solo lectura) y confirmar que no existan blockers PostgreSQL.
+8. Ejecutar `backend/migration_phase2b_legal_case_signals_acl_hardening.sql` para aplicar el hardening ACL/RLS posterior a la reconciliacion estructural.
+9. Ejecutar `backend/postcheck_legal_case_signals_acl_hardening.sql` (solo lectura) y exigir `VERIFIED` sin failures.
+
+Las tres tablas nuevas son backend-only: RLS `ENABLE + FORCE`, cero policies de cliente, `anon`/`authenticated` sin acceso y `service_role` con `SELECT, INSERT, UPDATE`, sin `DELETE`.
+
+La reconciliacion estructural de `legal_case_signals` no recrea la tabla y se limita a agregar o validar los once campos de trazabilidad faltantes. El hardening ACL/RLS se aplica despues, mediante una migracion independiente. `backend/rollback_legal_case_signals_acl_hardening.sql` restaura el baseline anterior exclusivamente como mecanismo de contingencia; no es un paso normal del despliegue.
+
+El hardening ACL/RLS de `public.legal_case_signals` fue ejecutado y validado en produccion con este estado final:
+
+- RLS habilitado: `true`.
+- FORCE RLS: `true`.
+- Policies: `0`.
+- `PUBLIC`, `anon` y `authenticated`: sin privilegios.
+- `service_role`: `SELECT`, `INSERT` y `UPDATE`; sin `DELETE`, `TRUNCATE`, `REFERENCES`, `TRIGGER` ni `MAINTAIN`.
+- `service_role.rolbypassrls`: `true`.
+- Post-check: `VERIFIED`, con `failures: []`.
+
+Validacion funcional productiva realizada:
+
+- Admin Senales judiciales carga correctamente.
+- La busqueda por cedula funciona.
+- Scoring funciona.
+- Una senal existente pudo actualizarse administrativamente.
+- Los contadores administrativos se actualizaron.
+- Disputas carga correctamente en estado vacio.
+
+No se probo una disputa real vinculada a `judicial_signal`; esa comprobacion especifica queda fuera de la evidencia anterior.
+
 ## 2. Que Valida Cada Migracion
 
 `migration_legal_compliance_foundation.sql`
@@ -47,6 +86,8 @@ No desplegar frontend/backend que dependan de estas tablas antes de aplicar las 
 - Crea solicitudes de revision humana sobre score o resultado automatizado.
 - Debe permitir registrar motivo, score/clasificacion actuales opcionales, estado, notas y resumen de revision.
 - No debe modificar scores ni decisiones actuales.
+
+Las variantes `migration_phase2b_*_hardened.sql` conservan estos contratos y agregan validacion defensiva, transaccion, idempotencia, RLS y privilegio minimo. `migration_phase2b_legal_case_signals_reconciliation.sql` cubre unicamente los once campos faltantes confirmados, sin alterar otras tablas. Un esquema homonimo o parcialmente incompatible produce `INCOMPATIBLE_SCHEMA`/`PREREQUISITE_FAILURE` y rollback.
 
 ## 3. Variables Y Configuracion Requerida
 
