@@ -18,6 +18,7 @@ import { emailVerificationFetch as fetch } from '@/lib/emailVerification';
 import {
   getSearchResponseError,
   getSearchResultPresentation,
+  type InsufficientDataPresentation,
 } from './searchPresentation';
 
 type ScoreFactor = {
@@ -507,11 +508,11 @@ function ScoreExplanationSection({ resultado }: { resultado: ResultadoBusqueda }
   );
 }
 
-function InsufficientInformationCard({ resultado }: { resultado: ResultadoBusqueda }) {
-  const presentation = getSearchResultPresentation(resultado);
-
-  if (presentation.kind !== 'insufficient') return null;
-
+function InsufficientInformationCard({
+  presentation,
+}: {
+  presentation: InsufficientDataPresentation<ScoreExplanationFactor>;
+}) {
   return (
     <AppCard>
       <div className="flex flex-col gap-5">
@@ -821,7 +822,9 @@ export default function BuscarPage() {
   const API_URL = process.env.NEXT_PUBLIC_API_URL;
 
   const cedulaValida = useMemo(() => isValidCedula(cedula), [cedula]);
-  const noEncontrado = resultado && resultado.nombre === null;
+  const resultPresentation = resultado
+    ? getSearchResultPresentation(resultado)
+    : null;
 
   const handleUpgradeClick = useCallback(async () => {
     try {
@@ -1101,17 +1104,17 @@ export default function BuscarPage() {
           </div>
         )}
 
-        {resultado && noEncontrado && !(resultado.success === true && resultado.score === null) && (
+        {resultado && resultPresentation?.kind === 'not-found' && (
           <div className="rounded-2xl border border-yellow-300 bg-yellow-50 p-5 text-yellow-900 shadow-sm">
             No se encontró historial para la cédula <strong>{resultado.cedula}</strong>.
           </div>
         )}
 
-        {resultado && resultado.success === true && resultado.score === null && (
-          <InsufficientInformationCard resultado={resultado} />
+        {resultPresentation?.kind === 'insufficient-data' && (
+          <InsufficientInformationCard presentation={resultPresentation} />
         )}
 
-        {resultado && !noEncontrado && resultado.score !== null && (
+        {resultado && resultPresentation?.kind === 'scored' && (
           <div className="space-y-6">
             <AppCard>
               <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">

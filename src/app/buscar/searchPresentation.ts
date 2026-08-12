@@ -6,6 +6,7 @@ export const INSUFFICIENT_INFORMATION_CAUTION =
 
 type SearchPresentationInput<TFactor> = {
   success: boolean;
+  nombre?: string | null;
   score: number | null;
   reportes_aprobados: number;
   procesos_judiciales: number;
@@ -19,28 +20,31 @@ type SearchPresentationInput<TFactor> = {
   };
 };
 
+export type InsufficientDataPresentation<TFactor> = {
+  kind: 'insufficient-data';
+  title: typeof INSUFFICIENT_INFORMATION_TITLE;
+  summary: string;
+  scoreText: 'Score: No disponible';
+  caution: typeof INSUFFICIENT_INFORMATION_CAUTION;
+  reportesAprobados: number;
+  procesosJudiciales: number;
+  historialVerificado: number;
+  humanReviewRecommended: boolean;
+  factors: TFactor[];
+};
+
 export type SearchResultPresentation<TFactor> =
   | { kind: 'scored' }
+  | { kind: 'not-found' }
   | { kind: 'other' }
-  | {
-      kind: 'insufficient';
-      title: typeof INSUFFICIENT_INFORMATION_TITLE;
-      summary: string;
-      scoreText: 'Score: No disponible';
-      caution: typeof INSUFFICIENT_INFORMATION_CAUTION;
-      reportesAprobados: number;
-      procesosJudiciales: number;
-      historialVerificado: number;
-      humanReviewRecommended: boolean;
-      factors: TFactor[];
-    };
+  | InsufficientDataPresentation<TFactor>;
 
 export function getSearchResultPresentation<TFactor>(
   result: SearchPresentationInput<TFactor>
 ): SearchResultPresentation<TFactor> {
   if (result.success === true && result.score === null) {
     return {
-      kind: 'insufficient',
+      kind: 'insufficient-data',
       title: INSUFFICIENT_INFORMATION_TITLE,
       summary:
         result.score_explanation?.summary ||
@@ -54,6 +58,10 @@ export function getSearchResultPresentation<TFactor>(
         result.score_explanation?.human_review_recommended === true,
       factors: result.score_explanation?.factors ?? [],
     };
+  }
+
+  if (result.nombre === null) {
+    return { kind: 'not-found' };
   }
 
   if (result.score !== null) {
