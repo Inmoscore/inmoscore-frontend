@@ -15,6 +15,10 @@ import { PageContainer } from '@/components/ui/PageContainer';
 import { SectionHeader } from '@/components/ui/SectionHeader';
 import { StatusBadge, type StatusTone } from '@/components/ui/StatusBadge';
 import { emailVerificationFetch as fetch } from '@/lib/emailVerification';
+import {
+  getSearchResponseError,
+  getSearchResultPresentation,
+} from './searchPresentation';
 
 type ScoreFactor = {
   type: string;
@@ -503,6 +507,86 @@ function ScoreExplanationSection({ resultado }: { resultado: ResultadoBusqueda }
   );
 }
 
+function InsufficientInformationCard({ resultado }: { resultado: ResultadoBusqueda }) {
+  const presentation = getSearchResultPresentation(resultado);
+
+  if (presentation.kind !== 'insufficient') return null;
+
+  return (
+    <AppCard>
+      <div className="flex flex-col gap-5">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <p className="text-xs font-black uppercase tracking-[0.2em] text-amber-700">
+              Resultado de la búsqueda
+            </p>
+            <h2 className="mt-2 text-2xl font-black text-slate-950">
+              {presentation.title}
+            </h2>
+            <p className="mt-3 max-w-3xl leading-7 text-slate-700">
+              {presentation.summary}
+            </p>
+          </div>
+          {presentation.humanReviewRecommended && (
+            <StatusBadge tone="warning">Revisión humana recomendada</StatusBadge>
+          )}
+        </div>
+
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+            <p className="text-xs font-black uppercase tracking-[0.14em] text-slate-500">
+              Resultado del modelo
+            </p>
+            <p className="mt-3 text-2xl font-black text-slate-950">
+              {presentation.scoreText}
+            </p>
+          </div>
+          <StatItem label="Reportes aprobados" value={presentation.reportesAprobados} />
+          <StatItem label="Procesos judiciales" value={presentation.procesosJudiciales} />
+          <StatItem label="Historial arrendaticio verificado" value={presentation.historialVerificado} />
+        </div>
+
+        <div className="rounded-2xl border border-amber-300 bg-amber-50 p-4 text-sm font-bold text-amber-950">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" />
+            <p>{presentation.caution}</p>
+          </div>
+        </div>
+
+        {presentation.factors.length > 0 && (
+          <section aria-labelledby="insufficient-score-factors">
+            <h3 id="insufficient-score-factors" className="text-lg font-black text-slate-950">
+              Factores informativos
+            </h3>
+            <div className="mt-3 grid gap-3 lg:grid-cols-2">
+              {presentation.factors.map((factor) => (
+                <article
+                  key={factor.key}
+                  className={`rounded-xl border p-4 ${getExplanationTone(factor)}`}
+                >
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="font-semibold">{factor.label}</p>
+                    <LegalBadge tone={factor.impacts_score ? 'green' : 'gray'}>
+                      {factor.impacts_score ? 'Impacta score' : 'No impacta score'}
+                    </LegalBadge>
+                  </div>
+                  <p className="mt-2 text-sm leading-6">{factor.description}</p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {factor.disputed && <LegalBadge tone="amber">En disputa</LegalBadge>}
+                    {factor.pending_legal_review && (
+                      <LegalBadge tone="amber">Revisión legal pendiente</LegalBadge>
+                    )}
+                  </div>
+                </article>
+              ))}
+            </div>
+          </section>
+        )}
+      </div>
+    </AppCard>
+  );
+}
+
 function SearchLimitCard({
   plan_type,
   daily_limit,
@@ -857,9 +941,8 @@ export default function BuscarPage() {
         return;
       }
 
-      if (!response.ok || data.success === false) {
-        throw new Error(data.message || 'No se pudo completar la búsqueda');
-      }
+      const responseError = getSearchResponseError(response.ok, data);
+      if (responseError) throw new Error(responseError);
 
       setResultado(data as ResultadoBusqueda);
     } catch (err) {
@@ -1018,13 +1101,17 @@ export default function BuscarPage() {
           </div>
         )}
 
-        {resultado && noEncontrado && (
+        {resultado && noEncontrado && !(resultado.success === true && resultado.score === null) && (
           <div className="rounded-2xl border border-yellow-300 bg-yellow-50 p-5 text-yellow-900 shadow-sm">
             No se encontró historial para la cédula <strong>{resultado.cedula}</strong>.
           </div>
         )}
 
-        {resultado && !noEncontrado && (
+        {resultado && resultado.success === true && resultado.score === null && (
+          <InsufficientInformationCard resultado={resultado} />
+        )}
+
+        {resultado && !noEncontrado && resultado.score !== null && (
           <div className="space-y-6">
             <AppCard>
               <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
