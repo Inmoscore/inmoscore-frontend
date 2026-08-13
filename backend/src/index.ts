@@ -23,7 +23,15 @@ import {
   registerLegalAcceptance,
 } from './lib/legalCompliance';
 import { SCORE_CONFIG } from './scoring/core/config';
-import { calculateAndStoreScore, getCurrentScore } from './scoring/services/ScoreService';
+import {
+  calculateAndStoreScore,
+  getCurrentScore,
+  synchronizeReportScoreAfterMutation,
+} from './scoring/services/ScoreService';
+import {
+  isReportEligibleForScoring,
+  isReportNoticeResolvedForScoring,
+} from './scoring/core/reportScoringParticipation';
 import { AdminAuditSeverity, logAdminAction } from './lib/adminAudit';
 import { logAuthenticationAudit } from './lib/authenticationAudit';
 import {
@@ -2052,27 +2060,6 @@ function applyAdminPendingReportsFilter(query: any): any {
     .or(
       `legal_review_status.is.null,legal_review_status.in.(${ADMIN_PENDING_LEGAL_REVIEW_STATUSES.join(',')})`
     );
-}
-
-function isReportEligibleForScoring(report: Record<string, unknown>): boolean {
-  return (
-    report.estado === 'aprobado' &&
-    report.report_verification_status === 'verified' &&
-    report.scoring_eligibility_status === 'eligible' &&
-    isNoticeContradictionResolvedForScoring(report)
-  );
-}
-
-function isNoticeContradictionResolvedForScoring(report: {
-  subject_notice_required?: boolean | null;
-  subject_notice_status?: SubjectNoticeStatus | string | null;
-  contradiction_status?: ContradictionStatus | string | null;
-}): boolean {
-  if (report.subject_notice_required === false) return true;
-  if (report.subject_notice_status === 'waived' || report.subject_notice_status === 'not_required') {
-    return true;
-  }
-  return report.contradiction_status === 'rejected' || report.contradiction_status === 'expired';
 }
 
 function addCalendarDays(date: Date, days: number): Date {
@@ -12701,7 +12688,7 @@ app.patch(
           break;
         case 'approve':
           nextStatus = 'verified';
-          nextScoringEligibilityStatus = isNoticeContradictionResolvedForScoring(existingReportRow)
+          nextScoringEligibilityStatus = isReportNoticeResolvedForScoring(existingReportRow)
             ? 'eligible'
             : 'not_eligible';
           updatePayload.estado = 'aprobado';
@@ -12743,6 +12730,11 @@ app.patch(
       if (updateError || !report) {
         throw updateError || new Error('No se pudo actualizar la revision del reporte');
       }
+
+      await synchronizeReportScoreAfterMutation(
+        existingReportRow,
+        report as unknown as AdminReportRow
+      );
 
       const logNotes =
         action === 'reject'
@@ -13101,6 +13093,11 @@ app.post(
         throw updateError || new Error('No se pudo actualizar notificacion del reporte');
       }
 
+      await synchronizeReportScoreAfterMutation(
+        reportRow,
+        report as unknown as AdminReportRow
+      );
+
       const updatedReportRow = report as unknown as AdminReportRow;
 
       const { data: subjectNotices, error: subjectNoticesError } = await supabase
@@ -13301,7 +13298,7 @@ app.put(
       }
 
       const legacyScoringEligibility =
-        estado === 'aprobado' && isNoticeContradictionResolvedForScoring(existingReportForLegacy)
+        estado === 'aprobado' && isReportNoticeResolvedForScoring(existingReportForLegacy)
           ? 'eligible'
           : estado === 'aprobado'
             ? 'not_eligible'
@@ -13332,6 +13329,11 @@ app.put(
       if (error || !report) {
         throw error || new Error('No se pudo actualizar el reporte');
       }
+
+      await synchronizeReportScoreAfterMutation(
+        existingReportForLegacy,
+        report as unknown as AdminReportRow
+      );
 
       const reportRow = report as unknown as AdminReportRow;
 

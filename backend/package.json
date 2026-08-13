@@ -7,7 +7,7 @@
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
     "build": "node node_modules/typescript/bin/tsc",
     "start": "node dist/index.js",
-    "test": "npm run build && node --test dist/lib/passwordRecovery.test.js dist/lib/publicUrl.test.js dist/lib/corsOrigins.test.js dist/lib/emailVerificationPolicy.test.js dist/lib/adminOperationalSafety.test.js dist/lib/dataSubjectRequests.test.js dist/lib/legalComplianceMigrations.test.js",
+    "test": "npm run build && node --test dist/lib/passwordRecovery.test.js dist/lib/publicUrl.test.js dist/lib/corsOrigins.test.js dist/lib/emailVerificationPolicy.test.js dist/lib/adminOperationalSafety.test.js dist/lib/dataSubjectRequests.test.js dist/lib/legalComplianceMigrations.test.js dist/scoring/core/reportScoringParticipation.test.js",
     "test:phase2b": "npm run build && node --test dist/lib/legalComplianceMigrations.test.js"
   },
   "dependencies": {

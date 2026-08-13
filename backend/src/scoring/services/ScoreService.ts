@@ -1,6 +1,11 @@
 import { supabase } from '../../lib/supabase';
 import { calculateScore } from '../engine/ScoreCalculator';
 import { SCORE_CONFIG } from '../core/config';
+import {
+  isReportEligibleForScoring,
+  ReportScoringState,
+  synchronizeReportScoringParticipation,
+} from '../core/reportScoringParticipation';
 
 type ScoreClassification = 'low' | 'medium' | 'high' | 'critical';
 
@@ -40,6 +45,8 @@ type ScoreInputReport = {
 
 type ReportRow = {
   id?: string;
+  tenant_id?: string | null;
+  estado?: string | null;
   tipo_problema: string | null;
   fecha_reporte: string | null;
   reportado_por?: string | null;
@@ -185,14 +192,6 @@ function isVerifiedScoringSignal(signal: LegalCaseSignalRow): boolean {
   );
 }
 
-function isReportNoticeResolvedForScoring(report: ReportRow): boolean {
-  if (report.subject_notice_required === false) return true;
-  if (report.subject_notice_status === 'waived' || report.subject_notice_status === 'not_required') {
-    return true;
-  }
-  return report.contradiction_status === 'rejected' || report.contradiction_status === 'expired';
-}
-
 function calculateTotalPenalty(factors: any[] | null | undefined): number {
   return (factors || []).reduce((acc, factor) => {
     return acc + Number(factor?.penalty || 0);
@@ -242,6 +241,8 @@ async function getApprovedReports(tenantId: string): Promise<ReportRow[]> {
     .select(
       [
         'id',
+        'tenant_id',
+        'estado',
         'tipo_problema',
         'fecha_reporte',
         'reportado_por',
@@ -262,7 +263,7 @@ async function getApprovedReports(tenantId: string): Promise<ReportRow[]> {
     throw new Error(`Error obteniendo reportes aprobados: ${error.message}`);
   }
 
-  return (((data || []) as unknown) as ReportRow[]).filter(isReportNoticeResolvedForScoring);
+  return (((data || []) as unknown) as ReportRow[]).filter(isReportEligibleForScoring);
 }
 
 async function getVerifiedLegalSignals(tenantId: string): Promise<LegalCaseSignalRow[]> {
@@ -332,6 +333,17 @@ export async function getCurrentScore(tenantId: string) {
   }
 
   return data as TenantCurrentScoreRow | null;
+}
+
+async function invalidateCurrentScore(tenantId: string): Promise<void> {
+  const { error } = await supabase
+    .from('tenant_current_scores')
+    .delete()
+    .eq('tenant_id', tenantId);
+
+  if (error) {
+    throw new Error(`Error invalidando tenant_current_scores: ${error.message}`);
+  }
 }
 
 async function upsertCurrentScore(
@@ -411,4 +423,23 @@ export async function calculateAndStoreScore(tenantId: string, _cedula?: string)
   await upsertCurrentScore(payload, insertedScore.id);
 
   return insertedScore;
+}
+
+export async function synchronizeReportScoreAfterMutation(
+  previousReport: ReportScoringState,
+  updatedReport: ReportScoringState
+): Promise<boolean> {
+  const tenantId = updatedReport.tenant_id || previousReport.tenant_id;
+
+  if (!tenantId) {
+    throw new Error('tenantId es requerido para sincronizar el score de un reporte');
+  }
+
+  return synchronizeReportScoringParticipation({
+    previousReport,
+    updatedReport,
+    tenantId,
+    invalidateCurrentScore,
+    recalculateScore: (id) => calculateAndStoreScore(id),
+  });
 }
