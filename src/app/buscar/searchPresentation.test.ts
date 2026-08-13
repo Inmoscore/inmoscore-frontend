@@ -1,10 +1,16 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import {
   getSearchResponseError,
+  getSearchResultRenderDecision,
   getSearchResultPresentation,
   INSUFFICIENT_INFORMATION_CAUTION,
   INSUFFICIENT_INFORMATION_TITLE,
+  renderSearchResultDecision,
+  shouldScrollAfterSearchResponse,
+  shouldScrollToSearchResult,
 } from './searchPresentation.ts';
 
 const productionInsufficientDataFixture = {
@@ -51,7 +57,7 @@ const productionInsufficientDataFixture = {
   plan_type: 'free',
   daily_limit: 3,
   used_searches: 1,
-  remaining_searches: 2,
+  remaining_searches: 0,
   bonus_credits_available: 2,
   bonus_credit_used: false,
 };
@@ -88,6 +94,56 @@ test('routes the exact production null-score payload to insufficient-data', () =
     productionInsufficientDataFixture.score_explanation.factors
   );
   assert.equal(presentation.factors[0].impacts_score, false);
+});
+
+test('renders InsufficientInformationCard for the exact production null-score payload', () => {
+  const renderDecision = getSearchResultRenderDecision(productionInsufficientDataFixture);
+  const rendered = renderSearchResultDecision(renderDecision, {
+    notFound: () => createElement('div', { 'data-testid': 'not-found' }),
+    insufficientData: (presentation) =>
+      createElement(
+        'section',
+        { 'data-testid': 'InsufficientInformationCard' },
+        presentation.title
+      ),
+    scored: () => createElement('div', { 'data-testid': 'scored' }),
+  });
+  const html = rendered ? renderToStaticMarkup(rendered) : '';
+
+  assert.equal(renderDecision.kind, 'insufficient-data');
+  assert.match(html, /data-testid="InsufficientInformationCard"/);
+  assert.match(html, new RegExp(INSUFFICIENT_INFORMATION_TITLE));
+  assert.doesNotMatch(html, /data-testid="not-found"|data-testid="scored"/);
+  assert.equal(productionInsufficientDataFixture.remaining_searches, 0);
+  assert.equal(productionInsufficientDataFixture.bonus_credits_available, 2);
+});
+
+test('requests result scrolling only for successful renderable results', () => {
+  const insufficientDecision = getSearchResultRenderDecision(
+    productionInsufficientDataFixture
+  );
+  const scoredDecision = getSearchResultRenderDecision({
+    success: true,
+    nombre: 'Persona con score',
+    score: 82,
+    reportes_aprobados: 1,
+    procesos_judiciales: 0,
+  });
+  const notFoundDecision = { kind: 'not-found' } as const;
+  const errorDecision = getSearchResultRenderDecision(null);
+
+  assert.equal(shouldScrollToSearchResult(insufficientDecision), true);
+  assert.equal(shouldScrollToSearchResult(scoredDecision), true);
+  assert.equal(shouldScrollToSearchResult(notFoundDecision), true);
+  assert.equal(shouldScrollToSearchResult(errorDecision), false);
+  assert.equal(
+    shouldScrollAfterSearchResponse(true, insufficientDecision),
+    true
+  );
+  assert.equal(
+    shouldScrollAfterSearchResponse(false, insufficientDecision),
+    false
+  );
 });
 
 test('returns the API message for HTTP and API errors', () => {

@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { AlertTriangle, ArrowLeft, ClipboardCheck, FileSearch, Search, ShieldCheck } from 'lucide-react';
@@ -17,7 +17,10 @@ import { StatusBadge, type StatusTone } from '@/components/ui/StatusBadge';
 import { emailVerificationFetch as fetch } from '@/lib/emailVerification';
 import {
   getSearchResponseError,
-  getSearchResultPresentation,
+  getSearchResultRenderDecision,
+  renderSearchResultDecision,
+  shouldScrollAfterSearchResponse,
+  shouldScrollToSearchResult,
   type InsufficientDataPresentation,
 } from './searchPresentation';
 
@@ -805,6 +808,8 @@ function RentalHistorySection({
 
 export default function BuscarPage() {
   const router = useRouter();
+  const resultContainerRef = useRef<HTMLDivElement>(null);
+  const scrollToResultPendingRef = useRef(false);
 
   const [cedula, setCedula] = useState('');
   const [resultado, setResultado] = useState<ResultadoBusqueda | null>(null);
@@ -822,9 +827,25 @@ export default function BuscarPage() {
   const API_URL = process.env.NEXT_PUBLIC_API_URL;
 
   const cedulaValida = useMemo(() => isValidCedula(cedula), [cedula]);
-  const resultPresentation = resultado
-    ? getSearchResultPresentation(resultado)
-    : null;
+  const resultRenderDecision = useMemo(
+    () => getSearchResultRenderDecision(resultado),
+    [resultado]
+  );
+
+  useEffect(() => {
+    if (
+      !scrollToResultPendingRef.current ||
+      !shouldScrollToSearchResult(resultRenderDecision)
+    ) {
+      return;
+    }
+
+    scrollToResultPendingRef.current = false;
+    resultContainerRef.current?.scrollIntoView({
+      behavior: 'smooth',
+      block: 'start',
+    });
+  }, [resultado, resultRenderDecision]);
 
   const handleUpgradeClick = useCallback(async () => {
     try {
@@ -872,6 +893,7 @@ export default function BuscarPage() {
 
     const cleanCedula = cedula.trim();
 
+    scrollToResultPendingRef.current = false;
     setError('');
     setResultado(null);
 
@@ -947,7 +969,12 @@ export default function BuscarPage() {
       const responseError = getSearchResponseError(response.ok, data);
       if (responseError) throw new Error(responseError);
 
-      setResultado(data as ResultadoBusqueda);
+      const nextResultado = data as ResultadoBusqueda;
+      scrollToResultPendingRef.current = shouldScrollAfterSearchResponse(
+        response.ok,
+        getSearchResultRenderDecision(nextResultado)
+      );
+      setResultado(nextResultado);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Error al conectar con el servidor';
       setError(message);
@@ -1104,17 +1131,17 @@ export default function BuscarPage() {
           </div>
         )}
 
-        {resultado && resultPresentation?.kind === 'not-found' && (
+        <div ref={resultContainerRef} className="scroll-mt-24">
+        {renderSearchResultDecision(resultRenderDecision, {
+          notFound: () => resultado ? (
           <div className="rounded-2xl border border-yellow-300 bg-yellow-50 p-5 text-yellow-900 shadow-sm">
             No se encontró historial para la cédula <strong>{resultado.cedula}</strong>.
           </div>
-        )}
-
-        {resultPresentation?.kind === 'insufficient-data' && (
-          <InsufficientInformationCard presentation={resultPresentation} />
-        )}
-
-        {resultado && resultPresentation?.kind === 'scored' && (
+          ) : null,
+          insufficientData: (presentation) => (
+            <InsufficientInformationCard presentation={presentation} />
+          ),
+          scored: () => resultado ? (
           <div className="space-y-6">
             <AppCard>
               <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
@@ -1368,7 +1395,9 @@ export default function BuscarPage() {
               )}
             </DataTableShell>
           </div>
-        )}
+          ) : null,
+        })}
+        </div>
       </PageContainer>
     </PlatformShell>
   );

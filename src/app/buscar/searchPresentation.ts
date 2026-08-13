@@ -39,6 +39,24 @@ export type SearchResultPresentation<TFactor> =
   | { kind: 'other' }
   | InsufficientDataPresentation<TFactor>;
 
+export type SearchResultRenderDecision<TFactor> =
+  | { kind: 'empty' }
+  | { kind: 'not-found' }
+  | {
+      kind: 'insufficient-data';
+      presentation: InsufficientDataPresentation<TFactor>;
+    }
+  | { kind: 'scored' }
+  | { kind: 'other' };
+
+type SearchResultRenderers<TFactor, TOutput> = {
+  notFound: () => TOutput;
+  insufficientData: (
+    presentation: InsufficientDataPresentation<TFactor>
+  ) => TOutput;
+  scored: () => TOutput;
+};
+
 export function getSearchResultPresentation<TFactor>(
   result: SearchPresentationInput<TFactor>
 ): SearchResultPresentation<TFactor> {
@@ -69,6 +87,62 @@ export function getSearchResultPresentation<TFactor>(
   }
 
   return { kind: 'other' };
+}
+
+export function getSearchResultRenderDecision<TFactor>(
+  result: SearchPresentationInput<TFactor> | null
+): SearchResultRenderDecision<TFactor> {
+  if (!result) return { kind: 'empty' };
+
+  const presentation = getSearchResultPresentation(result);
+
+  switch (presentation.kind) {
+    case 'insufficient-data':
+      return {
+        kind: presentation.kind,
+        presentation,
+      };
+    case 'not-found':
+      return { kind: presentation.kind };
+    case 'scored':
+      return { kind: presentation.kind };
+    case 'other':
+      return { kind: presentation.kind };
+  }
+}
+
+export function renderSearchResultDecision<TFactor, TOutput>(
+  decision: SearchResultRenderDecision<TFactor>,
+  renderers: SearchResultRenderers<TFactor, TOutput>
+): TOutput | null {
+  switch (decision.kind) {
+    case 'not-found':
+      return renderers.notFound();
+    case 'insufficient-data':
+      return renderers.insufficientData(decision.presentation);
+    case 'scored':
+      return renderers.scored();
+    case 'empty':
+    case 'other':
+      return null;
+  }
+}
+
+export function shouldScrollToSearchResult<TFactor>(
+  decision: SearchResultRenderDecision<TFactor>
+): boolean {
+  return (
+    decision.kind === 'scored' ||
+    decision.kind === 'not-found' ||
+    decision.kind === 'insufficient-data'
+  );
+}
+
+export function shouldScrollAfterSearchResponse<TFactor>(
+  responseOk: boolean,
+  decision: SearchResultRenderDecision<TFactor>
+): boolean {
+  return responseOk && shouldScrollToSearchResult(decision);
 }
 
 export function getSearchResponseError(
